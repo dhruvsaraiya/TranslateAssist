@@ -1,0 +1,7 @@
+- can I have something like overlay a dot that can be visible over WhatsApp in android 
+- can that dot read messages in whatsapp chat from the window 
+- can that do translation in gujarati lipi from english OR gujarati written in english font.
+- I do not want to support notifications but past messages.
+- have as less human interaction as possible but if not user can either copy the message or select the message and then click on the dot to translate.
+- I want to use it for personal use only.
+- I do not want to publish it on play store or any other platform.
