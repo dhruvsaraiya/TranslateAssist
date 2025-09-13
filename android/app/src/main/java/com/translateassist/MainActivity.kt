@@ -34,6 +34,9 @@ class MainActivity : AppCompatActivity() {
         initializeComponents()
         setupClickListeners()
         updateStatus()
+        
+        // Check and request permissions on first launch
+        checkPermissionsOnStart()
     }
 
     private fun initializeViews() {
@@ -72,20 +75,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleOverlayClick() {
+        android.util.Log.d("MainActivity", "Overlay button clicked!")
+        Toast.makeText(this, "Translate button clicked!", Toast.LENGTH_SHORT).show()
+        
         val accessibilityService = TranslateAccessibilityService.instance
         if (accessibilityService == null) {
             Toast.makeText(this, "Please enable accessibility service first", Toast.LENGTH_SHORT).show()
+            android.util.Log.w("MainActivity", "Accessibility service not available")
             return
         }
 
-        // First try to get selected text
-        val selectedText = accessibilityService.getSelectedText()
-        if (!selectedText.isNullOrBlank()) {
-            translateAndShowResult(selectedText)
-        } else {
-            // If no text is selected, extract recent messages
-            accessibilityService.extractTextFromWhatsApp()
-        }
+        android.util.Log.d("MainActivity", "Accessibility service available, extracting text...")
+        
+        // For debugging, always extract all text instead of just selected text
+        android.util.Log.d("MainActivity", "Extracting all text for debugging...")
+        accessibilityService.extractTextFromWhatsApp()
     }
 
     private fun translateAndShowResult(text: String) {
@@ -114,9 +118,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestOverlayPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-            intent.data = Uri.parse("package:$packageName")
-            startActivityForResult(intent, REQUEST_OVERLAY_PERMISSION)
+            if (!Settings.canDrawOverlays(this)) {
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                intent.data = Uri.parse("package:$packageName")
+                startActivityForResult(intent, REQUEST_OVERLAY_PERMISSION)
+                Toast.makeText(this, "Please allow 'Display over other apps' permission", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -148,11 +155,13 @@ class MainActivity : AppCompatActivity() {
             Accessibility Service: $accessibilityStatus  
             Overlay Permission: $overlayPermission
             
-            Instructions:
-            1. Grant overlay permission
-            2. Enable accessibility service
-            3. Start overlay service
-            4. Open WhatsApp and tap the floating button to translate
+            Setup Steps:
+            1. Tap 'Start Overlay' to grant overlay permission
+            2. Tap 'Enable Accessibility Service' and turn on TranslateAssist
+            3. Start the overlay service
+            4. Open WhatsApp and tap the floating green button to translate
+            
+            Note: These are special Android permissions that require manual approval in system settings.
         """.trimIndent()
 
         overlayButton.text = if (OverlayService.instance != null) "Stop Overlay" else "Start Overlay"
@@ -169,6 +178,36 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == REQUEST_OVERLAY_PERMISSION) {
             updateStatus()
         }
+    }
+
+    private fun checkPermissionsOnStart() {
+        // Check overlay permission
+        if (!hasOverlayPermission()) {
+            showPermissionExplanationDialog()
+        }
+    }
+    
+    private fun showPermissionExplanationDialog() {
+        val builder = androidx.appcompat.app.AlertDialog.Builder(this)
+        builder.setTitle("Permissions Required")
+        builder.setMessage("""
+            TranslateAssist needs two permissions to work:
+            
+            1. Display over other apps - To show the floating translate button
+            2. Accessibility Service - To read text from WhatsApp
+            
+            Would you like to grant these permissions now?
+        """.trimIndent())
+        
+        builder.setPositiveButton("Grant Permissions") { _, _ ->
+            requestOverlayPermission()
+        }
+        
+        builder.setNegativeButton("Later") { dialog, _ ->
+            dialog.dismiss()
+        }
+        
+        builder.show()
     }
 
     override fun onDestroy() {

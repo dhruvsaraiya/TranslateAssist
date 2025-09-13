@@ -8,7 +8,9 @@ import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
-import kotlinx.coroutines.tasks.await
+import com.google.android.gms.tasks.Tasks
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 class TranslationEngine(private val context: Context) {
 
@@ -59,7 +61,11 @@ class TranslationEngine(private val context: Context) {
             return when {
                 languageCode == TranslateLanguage.ENGLISH -> {
                     // Translate English to Gujarati
-                    val translated = englishToGujaratiTranslator?.translate(text)?.await()
+                    val translated = suspendCoroutine<String?> { continuation ->
+                        englishToGujaratiTranslator?.translate(text)
+                            ?.addOnSuccessListener { result -> continuation.resume(result) }
+                            ?.addOnFailureListener { continuation.resume(null) }
+                    }
                     TranslationResult(
                         originalText = text,
                         translatedText = translated ?: "Translation failed",
@@ -88,7 +94,11 @@ class TranslationEngine(private val context: Context) {
                 }
                 else -> {
                     // Try to translate from detected language to Gujarati
-                    val translated = englishToGujaratiTranslator?.translate(text)?.await()
+                    val translated = suspendCoroutine<String?> { continuation ->
+                        englishToGujaratiTranslator?.translate(text)
+                            ?.addOnSuccessListener { result -> continuation.resume(result) }
+                            ?.addOnFailureListener { continuation.resume(null) }
+                    }
                     TranslationResult(
                         originalText = text,
                         translatedText = translated ?: "Translation not supported",
@@ -110,7 +120,11 @@ class TranslationEngine(private val context: Context) {
 
     private suspend fun identifyLanguage(text: String): String {
         return try {
-            val languageCode = languageIdentifier.identifyLanguage(text).await()
+            val languageCode = suspendCoroutine<String> { continuation ->
+                languageIdentifier.identifyLanguage(text)
+                    .addOnSuccessListener { result -> continuation.resume(result) }
+                    .addOnFailureListener { continuation.resume("und") }
+            }
             if (languageCode == "und") TranslateLanguage.ENGLISH else languageCode
         } catch (e: Exception) {
             Log.e(TAG, "Language identification failed", e)

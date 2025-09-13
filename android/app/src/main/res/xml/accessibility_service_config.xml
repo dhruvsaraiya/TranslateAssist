@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/accessibility_service_description"
-    android:packageNames="com.whatsapp"
-    android:accessibilityEventTypes="typeAllMaskValues"
+    android:packageNames="com.whatsapp,com.google.android.apps.messaging,com.android.mms,com.samsung.android.messaging"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeViewTextChanged|typeViewClicked"
     android:accessibilityFlags="flagDefault"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="true" />

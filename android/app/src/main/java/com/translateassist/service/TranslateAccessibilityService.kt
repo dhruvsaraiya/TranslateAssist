@@ -35,30 +35,59 @@ class TranslateAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Extract text from WhatsApp when overlay button is tapped
+     * Extract text from current app when overlay button is tapped
      */
     fun extractTextFromWhatsApp() {
         val rootNode = rootInActiveWindow
         if (rootNode == null) {
             Log.w(TAG, "Root node is null")
+            onTextExtracted?.invoke("Error: Could not access current app")
             return
         }
 
         val packageName = rootNode.packageName?.toString()
-        if (packageName != WHATSAPP_PACKAGE) {
-            Log.w(TAG, "Not in WhatsApp app: $packageName")
+        Log.d(TAG, "Current app package: $packageName")
+        
+        // Allow WhatsApp and common messaging apps for testing
+        val supportedApps = listOf(
+            "com.whatsapp",
+            "com.google.android.apps.messaging", 
+            "com.android.mms",
+            "com.samsung.android.messaging"
+        )
+        
+        if (packageName !in supportedApps) {
+            Log.w(TAG, "App not supported: $packageName")
+            onTextExtracted?.invoke("Error: Please open WhatsApp or Messages app")
             return
         }
 
-        val extractedTexts = mutableListOf<String>()
-        extractTextFromNode(rootNode, extractedTexts)
+        val allTexts = mutableListOf<String>()
+        
+        // Extract ALL text for debugging
+        extractAllText(rootNode, allTexts)
+        
+        Log.d(TAG, "Found ${allTexts.size} text elements total")
+        allTexts.forEachIndexed { index, text -> 
+            Log.d(TAG, "All Text $index: '$text'")
+        }
+        
+        // Log count for immediate feedback
+        Log.i(TAG, "=== ACCESSIBILITY DEBUG: Found ${allTexts.size} text elements ===")
 
-        if (extractedTexts.isNotEmpty()) {
-            // Get the most recent messages (usually at the end of the list)
-            val recentMessages = extractedTexts.takeLast(5).joinToString("\n")
-            onTextExtracted?.invoke(recentMessages)
+        if (allTexts.isNotEmpty()) {
+            // For now, let's show all text so you can see what's available
+            val allTextCombined = allTexts.joinToString(" | ")
+            Log.d(TAG, "Sending all text for debugging: ${allTextCombined.take(200)}")
+            
+            // Show first few texts in popup for easier debugging
+            val debugText = "DEBUG - Found ${allTexts.size} texts:\n" + 
+                           allTexts.take(10).joinToString("\n") { "• $it" }
+            
+            onTextExtracted?.invoke(debugText)
         } else {
-            Log.w(TAG, "No text extracted from WhatsApp")
+            Log.w(TAG, "No text extracted from app")
+            onTextExtracted?.invoke("No text found in current screen. Try scrolling to see messages or select specific text.")
         }
     }
 
@@ -71,13 +100,12 @@ class TranslateAccessibilityService : AccessibilityService() {
         // Check if this node contains message text
         val text = node.text?.toString()
         if (!text.isNullOrBlank() && isMessageText(node)) {
-            texts.add(text.trim())
-        }
-
-        // Check content description as fallback
-        val contentDesc = node.contentDescription?.toString()
-        if (!contentDesc.isNullOrBlank() && isMessageText(node)) {
-            texts.add(contentDesc.trim())
+            val trimmedText = text.trim()
+            // Avoid duplicates and ensure meaningful content
+            if (trimmedText !in texts && trimmedText.length > 2) {
+                texts.add(trimmedText)
+                Log.d(TAG, "Added text: '$trimmedText' from ${node.className}")
+            }
         }
 
         // Recursively check child nodes
@@ -92,13 +120,41 @@ class TranslateAccessibilityService : AccessibilityService() {
     private fun isMessageText(node: AccessibilityNodeInfo): Boolean {
         val className = node.className?.toString() ?: ""
         val resourceId = node.viewIdResourceName ?: ""
+        val text = node.text?.toString() ?: ""
+        val contentDesc = node.contentDescription?.toString() ?: ""
         
-        // Look for TextView or similar components that typically contain messages
-        return className.contains("TextView") || 
-               className.contains("EditText") ||
-               resourceId.contains("message") ||
-               resourceId.contains("text") ||
-               resourceId.contains("chat")
+        // Skip common UI labels and hints
+        val skipTexts = listOf(
+            "text message", "send", "type a message", "compose", "camera", "attach",
+            "more options", "back", "search", "call", "video call", "info",
+            "emoji", "voice message", "gallery", "contact", "location"
+        )
+        
+        if (skipTexts.any { skip -> 
+            text.lowercase().contains(skip) || contentDesc.lowercase().contains(skip)
+        }) {
+            return false
+        }
+        
+        // Skip very short text (likely UI elements)
+        if (text.length < 3) {
+            return false
+        }
+        
+        // Skip text that looks like UI elements (all caps, single words)
+        if (text.all { it.isUpperCase() || !it.isLetter() } && text.length < 10) {
+            return false
+        }
+        
+        // Look for TextView with meaningful content
+        val isTextView = className.contains("TextView")
+        val hasMessageContent = text.length > 3 && text.any { it.isLetter() }
+        val isInMessageArea = resourceId.contains("message") || 
+                             resourceId.contains("text") || 
+                             resourceId.contains("content") ||
+                             resourceId.contains("body")
+        
+        return isTextView && hasMessageContent && (isInMessageArea || text.length > 10)
     }
 
     /**
@@ -127,6 +183,82 @@ class TranslateAccessibilityService : AccessibilityService() {
 
         for (i in 0 until node.childCount) {
             findSelectedText(node.getChild(i), selectedTexts)
+        }
+    }
+    
+    /**
+     * Look for specific message container patterns in messaging apps
+     */
+    private fun findMessageContainers(node: AccessibilityNodeInfo?, texts: MutableList<String>) {
+        if (node == null) return
+        
+        val resourceId = node.viewIdResourceName ?: ""
+        val className = node.className?.toString() ?: ""
+        
+        // Look for known message container patterns
+        val messageContainerPatterns = listOf(
+            "message_text", "msg_text", "text_content", "bubble_text",
+            "conversation_text", "chat_message", "message_body",
+            "text_view_message", "message_content"
+        )
+        
+        val isMessageContainer = messageContainerPatterns.any { pattern ->
+            resourceId.contains(pattern, ignoreCase = true)
+        }
+        
+        if (isMessageContainer) {
+            val text = node.text?.toString()
+            if (!text.isNullOrBlank() && text.length > 3) {
+                Log.d(TAG, "Found message container: $resourceId with text: ${text.take(50)}")
+                texts.add(text.trim())
+            }
+        }
+        
+        // Also check for RecyclerView or ListView items that might contain messages
+        if (className.contains("TextView") && resourceId.isNotEmpty()) {
+            val text = node.text?.toString()
+            if (!text.isNullOrBlank() && 
+                text.length > 10 && 
+                !text.lowercase().contains("text message") &&
+                !text.lowercase().contains("type a message")) {
+                
+                // This might be actual message content
+                Log.d(TAG, "Found potential message: $resourceId - ${text.take(50)}")
+                texts.add(text.trim())
+            }
+        }
+        
+        // Recursively check child nodes
+        for (i in 0 until node.childCount) {
+            findMessageContainers(node.getChild(i), texts)
+        }
+    }
+    
+    /**
+     * Extract ALL text for debugging purposes
+     */
+    private fun extractAllText(node: AccessibilityNodeInfo?, texts: MutableList<String>) {
+        if (node == null) return
+        
+        val text = node.text?.toString()
+        if (!text.isNullOrBlank()) {
+            val trimmedText = text.trim()
+            if (trimmedText.isNotEmpty() && trimmedText !in texts) {
+                texts.add(trimmedText)
+            }
+        }
+        
+        val contentDesc = node.contentDescription?.toString()
+        if (!contentDesc.isNullOrBlank() && contentDesc != text) {
+            val trimmedDesc = contentDesc.trim()
+            if (trimmedDesc.isNotEmpty() && trimmedDesc !in texts) {
+                texts.add("CD: $trimmedDesc") // Mark content descriptions
+            }
+        }
+        
+        // Recursively check child nodes
+        for (i in 0 until node.childCount) {
+            extractAllText(node.getChild(i), texts)
         }
     }
 }
