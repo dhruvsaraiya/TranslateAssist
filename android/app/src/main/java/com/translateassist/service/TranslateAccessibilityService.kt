@@ -76,15 +76,21 @@ class TranslateAccessibilityService : AccessibilityService() {
         Log.i(TAG, "=== ACCESSIBILITY DEBUG: Found ${allTexts.size} text elements ===")
 
         if (allTexts.isNotEmpty()) {
-            // For now, let's show all text so you can see what's available
-            val allTextCombined = allTexts.joinToString(" | ")
-            Log.d(TAG, "Sending all text for debugging: ${allTextCombined.take(200)}")
+            // Filter for actual message content
+            val messageTexts = filterMessageContent(allTexts)
             
-            // Show first few texts in popup for easier debugging
-            val debugText = "DEBUG - Found ${allTexts.size} texts:\n" + 
-                           allTexts.take(10).joinToString("\n") { "• $it" }
+            Log.d(TAG, "Filtered to ${messageTexts.size} message texts: ${messageTexts.take(3)}")
             
-            onTextExtracted?.invoke(debugText)
+            if (messageTexts.isNotEmpty()) {
+                val recentMessages = messageTexts.takeLast(3).joinToString("\n")
+                Log.d(TAG, "Sending message content: $recentMessages")
+                onTextExtracted?.invoke(recentMessages)
+            } else {
+                // Fallback - show debug info if no messages found
+                val debugText = "No clear messages found. All texts:\n" + 
+                               allTexts.take(8).joinToString("\n") { "• $it" }
+                onTextExtracted?.invoke(debugText)
+            }
         } else {
             Log.w(TAG, "No text extracted from app")
             onTextExtracted?.invoke("No text found in current screen. Try scrolling to see messages or select specific text.")
@@ -259,6 +265,62 @@ class TranslateAccessibilityService : AccessibilityService() {
         // Recursively check child nodes
         for (i in 0 until node.childCount) {
             extractAllText(node.getChild(i), texts)
+        }
+    }
+    
+    /**
+     * Filter out UI elements and keep only actual message content
+     */
+    private fun filterMessageContent(allTexts: List<String>): List<String> {
+        return allTexts.filter { text ->
+            // Skip content descriptions (marked with "CD:")
+            if (text.startsWith("CD:")) return@filter false
+            
+            // Skip very short text (likely UI elements)
+            if (text.length < 3) return@filter false
+            
+            // Skip common UI patterns
+            val skipPatterns = listOf(
+                "text message", "send", "type a message", "compose", "attach",
+                "more options", "back", "search", "call", "video call",
+                "emoji", "voice message", "gallery", "contact", "location",
+                "thumbs up", "reaction", "texting with", "sms/mms", "show attach",
+                "you said", "delivered", "read", "typing"
+            )
+            
+            if (skipPatterns.any { pattern -> 
+                text.lowercase().contains(pattern.lowercase()) 
+            }) {
+                return@filter false
+            }
+            
+            // Skip time patterns (e.g., "9:13 PM", "12:34")
+            if (text.matches(Regex(".*\\d{1,2}:\\d{2}\\s*(AM|PM|am|pm).*"))) {
+                return@filter false
+            }
+            
+            // Skip phone number patterns
+            if (text.matches(Regex(".*\\(\\d{3}\\)\\s*\\d{3}-\\d{4}.*"))) {
+                return@filter false
+            }
+            
+            // Skip single characters or numbers
+            if (text.matches(Regex("^[\\d\\s]*$")) && text.length < 4) {
+                return@filter false
+            }
+            
+            // Must contain letters (actual text content)
+            if (!text.any { it.isLetter() }) {
+                return@filter false
+            }
+            
+            // Skip if all caps and short (likely UI button)
+            if (text.all { !it.isLetter() || it.isUpperCase() } && text.length < 15) {
+                return@filter false
+            }
+            
+            // This looks like actual message content
+            return@filter true
         }
     }
 }

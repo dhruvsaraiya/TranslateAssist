@@ -175,6 +175,50 @@ Potential improvements (not implemented):
 - Theme customization
 - Translation history
 
+## Offline Gujarati Transliteration (Python / Chaquopy)
+
+An experimental offline Roman Gujarati → Gujarati script transliteration path has been added using the `ai4bharat-transliteration` Python package embedded via [Chaquopy](https://chaquo.com/chaquopy/).
+
+### How it Works
+1. On first use, the app tries to run the embedded Python function `transliteration_engine.transliterate()`.
+2. If the Python engine (and required model) produces Gujarati output, that result is used (no network call).
+3. If the Python path fails (missing model / dependency trimmed / runtime error) the app falls back to the AI4Bharat HTTP APIs (batch then word-by-word). If both fail, the original text is returned unchanged.
+
+### Project Changes
+- Added Chaquopy plugin and `python {}` block in `app/build.gradle`.
+- Added `android/app/src/main/python/transliteration_engine.py` wrapper.
+- Added Kotlin bridge `PythonTransliterator.kt` which executes calls on `Dispatchers.IO`.
+- Updated `IndicTransTransliterator` to attempt offline path first.
+- Created assets directory `app/src/main/assets/xlit/gu/` for future placement of pruned Gujarati model files.
+
+### APK Size Considerations
+`ai4bharat-transliteration` depends on PyTorch which can drastically inflate the APK (tens of MB). To mitigate:
+- Prune: Vendor only necessary model and Python modules (remove other language weights).
+- Use CPU-only minimal Torch build or explore exporting the transliteration model to ONNX and loading it with an on-device inference runtime.
+- Consider lazy feature delivery or a separate downloadable model pack.
+
+For now, the reference implementation prioritizes correctness. Before production, inspect the generated APK / AAB size after enabling this feature.
+
+### Model Files
+Place Gujarati-specific tokenizer and weight files (if manually pruning) inside:
+```
+android/app/src/main/assets/xlit/gu/
+```
+Update `transliteration_engine.py` init logic to load from assets (copy to internal storage on first run) if you move away from bundled pip installation.
+
+### Threading
+All Python transliteration runs on a background dispatcher (`Dispatchers.IO`). Do not call it from main thread directly unless already inside a coroutine.
+
+### Fallback Logic Order
+```
+Embedded Python (Chaquopy) → AI4Bharat Batch API → AI4Bharat Word API → (return original text)
+```
+
+### Disabling Python Path
+If APK size is a concern and you want to disable temporarily, comment out the `install "ai4bharat-transliteration==..."` line in the `python { pip { } }` section of `app/build.gradle` and optionally remove the Chaquopy plugin.
+
+---
+
 ## Legal Disclaimer
 
 This app is for personal use only. It uses Android's accessibility services to read text from WhatsApp for translation purposes. Users are responsible for complying with all applicable terms of service and local laws. The app does not modify WhatsApp or interfere with its normal operation.
