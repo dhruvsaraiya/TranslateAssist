@@ -113,31 +113,40 @@ class TranslationEngine(private val context: Context) {
 
     private suspend fun processSingle(text: String): TranslationResult {
         val languageCode = identifyLanguage(text)
-        Log.d(TAG, "Detected language: $languageCode for line: ${text.take(50)}")
-        return when {
-            languageCode == TranslateLanguage.ENGLISH -> processEnglishLine(text)
-            languageCode == TranslateLanguage.GUJARATI -> TranslationResult(
+        val hasLatin = text.any { (it in 'a'..'z') || (it in 'A'..'Z') }
+        val hasGujarati = text.any { ch -> ch.code in 0x0A80..0x0AFF }
+        Log.d(TAG, "Detected language: $languageCode | hasLatin=$hasLatin | hasGujarati=$hasGujarati | snippet='${text.take(50)}'")
+
+        // Rule: If it has Latin letters (and not Gujarati script), always treat as an English-origin line
+        // so we perform BOTH Translation (EN->GU) and Transliteration attempts.
+        if (hasLatin && !hasGujarati) {
+            return processEnglishLine(text)
+        }
+
+        // Pure Gujarati script (or mixed containing Gujarati) -> leave as original (no translation)
+        if (hasGujarati) {
+            return TranslationResult(
                 originalText = text,
                 translatedText = text,
-                detectedLanguage = "",
+                detectedLanguage = languageCode,
                 translationType = "Original",
                 linePairs = listOf(TranslationLinePair(text, null, null, LineMode.ORIGINAL))
             )
-            else -> {
-                val translated = suspendCoroutine<String?> { continuation ->
-                    englishToGujaratiTranslator?.translate(text)
-                        ?.addOnSuccessListener { result -> continuation.resume(result) }
-                        ?.addOnFailureListener { continuation.resume(null) }
-                }
-                TranslationResult(
-                    originalText = text,
-                    translatedText = translated ?: "Translation not supported",
-                    detectedLanguage = "",
-                    translationType = "Translated",
-                    linePairs = listOf(TranslationLinePair(text, translated ?: "Translation not supported", null, LineMode.TRANSLATED))
-                )
-            }
         }
+
+        // Fallback for other scripts: attempt translation (will often be unsupported for non-EN sources)
+        val translated = suspendCoroutine<String?> { continuation ->
+            englishToGujaratiTranslator?.translate(text)
+                ?.addOnSuccessListener { result -> continuation.resume(result) }
+                ?.addOnFailureListener { continuation.resume(null) }
+        }
+        return TranslationResult(
+            originalText = text,
+            translatedText = translated ?: "Translation not supported",
+            detectedLanguage = languageCode,
+            translationType = "Translated",
+            linePairs = listOf(TranslationLinePair(text, translated ?: "Translation not supported", null, LineMode.TRANSLATED))
+        )
     }
     private suspend fun processEnglishLine(text: String): TranslationResult {
         Log.d(TAG, "EN line start | original='${text.take(200)}'")

@@ -46,13 +46,18 @@ class TranslationPopup(private val context: Context) {
         val recycler = popupView?.findViewById<RecyclerView>(R.id.translation_list)
         recycler?.layoutManager = LinearLayoutManager(context)
 
-        val pairs: List<TranslationLinePair> = when {
+        val basePairs: List<TranslationLinePair> = when {
             result.linePairs.isNotEmpty() -> result.linePairs
             result.originalText.isNotBlank() || result.translatedText.isNotBlank() -> listOf(
                 TranslationLinePair(result.originalText, result.translatedText, null, LineMode.TRANSLATED)
             )
             else -> emptyList()
         }
+
+        // Ensure chronological order: oldest message first, newest last.
+        // Current symptom: newest appearing at top -> reverse only if we detect likely reversed order.
+        // Simple approach: assume incoming is newest-first if last message was showing first; so reorder here.
+        val pairs = if (basePairs.size > 1) basePairs.asReversed() else basePairs
 
         val adapter = TranslationPairAdapter(pairs) { copiedLine ->
             copyToClipboard(copiedLine)
@@ -64,7 +69,7 @@ class TranslationPopup(private val context: Context) {
         val closeButton = popupView?.findViewById<ImageButton>(R.id.close_button)
 
         copyButton?.setOnClickListener {
-            // Copy all translated lines
+            // Copy all translated lines in display order (chronological)
             val textToCopy = if (pairs.isNotEmpty()) {
                 pairs.joinToString("\n") { it.chosenText() }
             } else result.translatedText
