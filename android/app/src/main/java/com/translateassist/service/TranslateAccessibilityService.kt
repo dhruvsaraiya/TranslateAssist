@@ -12,6 +12,17 @@ class TranslateAccessibilityService : AccessibilityService() {
         private const val WHATSAPP_PACKAGE = "com.whatsapp"
         var instance: TranslateAccessibilityService? = null
         var onTextExtracted: ((String) -> Unit)? = null
+        private val readinessQueue = mutableListOf<() -> Unit>()
+
+        /**
+         * If service already active run immediately, else enqueue until onServiceConnected fires.
+         */
+        fun runWhenReady(action: () -> Unit) {
+            val current = instance
+            if (current != null) {
+                try { action() } catch (_: Exception) {}
+            } else synchronized(readinessQueue) { readinessQueue += action }
+        }
     }
 
     // Stateless mode: no persistent tracking of prior messages; each invocation processes what's visible.
@@ -20,6 +31,24 @@ class TranslateAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         Log.d(TAG, "Accessibility service connected")
+        val toRun: List<() -> Unit> = synchronized(readinessQueue) {
+            val copy = readinessQueue.toList()
+            readinessQueue.clear()
+            copy
+        }
+        toRun.forEach { action ->
+            try { action() } catch (e: Exception) { Log.w(TAG, "Deferred action failed", e) }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        try { Log.d(TAG, "onCreate invoked") } catch (_: Exception) {}
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        Log.d(TAG, "onUnbind called – service may restart later")
+        return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -40,10 +69,12 @@ class TranslateAccessibilityService : AccessibilityService() {
      * Extract text from current app when overlay button is tapped
      */
     fun extractTextFromWhatsApp() {
-        val rootNode = rootInActiveWindow
+        val rootNode = try { rootInActiveWindow } catch (e: Exception) {
+            Log.w(TAG, "rootInActiveWindow access failed", e)
+            null
+        }
         if (rootNode == null) {
-            Log.w(TAG, "Root node is null")
-            onTextExtracted?.invoke("Error: Could not access current app")
+            onTextExtracted?.invoke("Error: Could not access current screen. Re-open the target chat.")
             return
         }
 
@@ -65,9 +96,14 @@ class TranslateAccessibilityService : AccessibilityService() {
         }
 
         val allTexts = mutableListOf<String>()
-        
-        // Extract ALL text for debugging
-        extractAllText(rootNode, allTexts)
+        try {
+            // Extract ALL text for debugging
+            extractAllText(rootNode, allTexts)
+        } catch (e: StackOverflowError) {
+            Log.e(TAG, "Node traversal overflow", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Traversal error", e)
+        }
         
         Log.d(TAG, "Found ${allTexts.size} text elements total")
         allTexts.forEachIndexed { index, text -> 
@@ -92,7 +128,11 @@ class TranslateAccessibilityService : AccessibilityService() {
                 val windowed = if (uniqueOrdered.size > MAX_VISIBLE_SEND) uniqueOrdered.takeLast(MAX_VISIBLE_SEND) else uniqueOrdered
                 val payload = windowed.joinToString("\n")
                 Log.d(TAG, "Sending VISIBLE messages (${windowed.size}/${uniqueOrdered.size} unique): $payload")
-                onTextExtracted?.invoke(payload)
+                try {
+                    onTextExtracted?.invoke(payload)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Callback dispatch failed", e)
+                }
             } else {
                 // Fallback - show debug info if no messages found
                 val debugText = "No clear messages found. All texts:\n" + 
@@ -101,7 +141,7 @@ class TranslateAccessibilityService : AccessibilityService() {
             }
         } else {
             Log.w(TAG, "No text extracted from app")
-            onTextExtracted?.invoke("No text found in current screen. Try scrolling to see messages or select specific text.")
+            try { onTextExtracted?.invoke("No text found. Scroll the chat and try again.") } catch (_: Exception) {}
         }
     }
 
@@ -253,26 +293,23 @@ class TranslateAccessibilityService : AccessibilityService() {
      */
     private fun extractAllText(node: AccessibilityNodeInfo?, texts: MutableList<String>) {
         if (node == null) return
-        
-        val text = node.text?.toString()
-        if (!text.isNullOrBlank()) {
-            val trimmedText = text.trim()
-            if (trimmedText.isNotEmpty() && trimmedText !in texts) {
-                texts.add(trimmedText)
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(node)
+        while (stack.isNotEmpty()) {
+            val current = stack.removeFirst()
+            val t = current.text?.toString()
+            if (!t.isNullOrBlank()) {
+                val trimmed = t.trim()
+                if (trimmed.isNotEmpty() && trimmed !in texts) texts.add(trimmed)
             }
-        }
-        
-        val contentDesc = node.contentDescription?.toString()
-        if (!contentDesc.isNullOrBlank() && contentDesc != text) {
-            val trimmedDesc = contentDesc.trim()
-            if (trimmedDesc.isNotEmpty() && trimmedDesc !in texts) {
-                texts.add("CD: $trimmedDesc") // Mark content descriptions
+            val cd = current.contentDescription?.toString()
+            if (!cd.isNullOrBlank() && cd != t) {
+                val trimmed = cd.trim()
+                if (trimmed.isNotEmpty() && trimmed !in texts) texts.add("CD: $trimmed")
             }
-        }
-        
-        // Recursively check child nodes
-        for (i in 0 until node.childCount) {
-            extractAllText(node.getChild(i), texts)
+            for (i in 0 until current.childCount) {
+                current.getChild(i)?.let { stack.add(it) }
+            }
         }
     }
     

@@ -26,3 +26,21 @@
 
 # Keep accessibility service
 -keep class com.translateassist.service.TranslateAccessibilityService { *; }
+-keep class com.translateassist.service.TranslateAccessibilityService { *; }
+# Keep all service package classes (defensive against future refactors)
+-keep class com.translateassist.service.** { *; }
+# Keep Application subclass
+-keep class com.translateassist.App { *; }
+
+
+# Strip out Log calls in release (they become no-ops)
+-assumenosideeffects class android.util.Log {
+	public static int v(...);
+	public static int d(...);
+	public static int i(...);
+	public static int w(...);
+	public static int e(...);
+	public static int wtf(...);
+}
+
+# (Optional) Strip Toast debug variants if you wrap them later (currently not wrapped)

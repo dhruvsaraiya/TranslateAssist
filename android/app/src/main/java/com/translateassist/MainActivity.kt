@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.translateassist.service.OverlayService
 import com.translateassist.service.TranslateAccessibilityService
+import com.translateassist.util.AccessibilityUtils
 import com.translateassist.translation.TranslationEngine
 import com.translateassist.ui.TranslationPopup
 import kotlinx.coroutines.CoroutineScope
@@ -78,18 +79,33 @@ class MainActivity : AppCompatActivity() {
         android.util.Log.d("MainActivity", "Overlay button clicked!")
         Toast.makeText(this, "Translate button clicked!", Toast.LENGTH_SHORT).show()
         
-        val accessibilityService = TranslateAccessibilityService.instance
-        if (accessibilityService == null) {
-            Toast.makeText(this, "Please enable accessibility service first", Toast.LENGTH_SHORT).show()
-            android.util.Log.w("MainActivity", "Accessibility service not available")
+        val systemEnabled = com.translateassist.util.AccessibilityUtils.isServiceEnabled(this, TranslateAccessibilityService::class.java)
+        val live = TranslateAccessibilityService.instance
+        if (live != null) {
+            android.util.Log.d("MainActivity", "Accessibility service active, extracting...")
+            live.extractTextFromWhatsApp()
             return
         }
-
-        android.util.Log.d("MainActivity", "Accessibility service available, extracting text...")
-        
-        // For debugging, always extract all text instead of just selected text
-        android.util.Log.d("MainActivity", "Extracting all text for debugging...")
-        accessibilityService.extractTextFromWhatsApp()
+        if (!systemEnabled) {
+            Toast.makeText(this, "Enable accessibility service first", Toast.LENGTH_SHORT).show()
+            android.util.Log.w("MainActivity", "Accessibility service disabled in system settings")
+            return
+        }
+        // System toggle ON but service instance not yet bound (process restart race). Queue action.
+        Toast.makeText(this, "Starting accessibility service...", Toast.LENGTH_SHORT).show()
+        android.util.Log.d("MainActivity", "Queueing extraction until service connects")
+        TranslateAccessibilityService.runWhenReady {
+            runOnUiThread {
+                TranslateAccessibilityService.instance?.extractTextFromWhatsApp()
+            }
+        }
+        // Fallback timeout message if not ready in ~3s
+        statusText.postDelayed({
+            if (TranslateAccessibilityService.instance == null) {
+                android.util.Log.w("MainActivity", "Service still not connected after wait")
+                Toast.makeText(this, "Still waiting for service. Re-open Accessibility settings if it doesn't start.", Toast.LENGTH_LONG).show()
+            }
+        }, 3000)
     }
 
     private fun translateAndShowResult(text: String) {
@@ -148,30 +164,40 @@ class MainActivity : AppCompatActivity() {
     private fun openAccessibilitySettings() {
         val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
         startActivity(intent)
-        Toast.makeText(this, "Please enable 'TranslateAssist' accessibility service", Toast.LENGTH_LONG).show()
+    Toast.makeText(this, "Please enable '${getString(R.string.app_name)}' accessibility service", Toast.LENGTH_LONG).show()
     }
 
     private fun updateStatus() {
         val overlayStatus = if (OverlayService.instance != null) "Running" else "Stopped"
-        val accessibilityStatus = if (TranslateAccessibilityService.instance != null) "Enabled" else "Disabled"
+        val accessibilitySystemEnabled = AccessibilityUtils.isServiceEnabled(this, TranslateAccessibilityService::class.java)
+        val accessibilityStatus = if (accessibilitySystemEnabled) {
+            if (TranslateAccessibilityService.instance != null) "Active" else "Enabled (waiting)"
+        } else "Disabled"
         val overlayPermission = if (hasOverlayPermission()) "Granted" else "Not Granted"
-        
+        val appName = getString(R.string.app_name)
         statusText.text = """
             Overlay Service: $overlayStatus
             Accessibility Service: $accessibilityStatus  
             Overlay Permission: $overlayPermission
-            
+
             Setup Steps:
             1. Tap 'Start Overlay' to grant overlay permission
-            2. Tap 'Enable Accessibility Service' and turn on TranslateAssist
+            2. Tap 'Enable Accessibility Service' and turn on $appName
             3. Start the overlay service
-            4. Open WhatsApp and tap the floating green button to translate
-            
+            4. Open WhatsApp and tap the floating dot to translate
+
             Note: These are special Android permissions that require manual approval in system settings.
         """.trimIndent()
 
         overlayButton.text = if (OverlayService.instance != null) "Stop Overlay" else "Start Overlay"
         overlayButton.isEnabled = hasOverlayPermission()
+
+        // Auto-start overlay if user swiped app away and reopened, while permissions intact
+        if (hasOverlayPermission() && OverlayService.instance == null && accessibilitySystemEnabled) {
+            // Lightweight auto start; user already approved permissions previously
+            startService(Intent(this, OverlayService::class.java))
+            overlayButton.text = "Stop Overlay"
+        }
     }
 
     override fun onResume() {
@@ -197,7 +223,7 @@ class MainActivity : AppCompatActivity() {
         val builder = androidx.appcompat.app.AlertDialog.Builder(this)
         builder.setTitle("Permissions Required")
         builder.setMessage("""
-            TranslateAssist needs two permissions to work:
+                ${getString(R.string.app_name)} needs two permissions to work:
             
             1. Display over other apps - To show the floating translate button
             2. Accessibility Service - To read text from WhatsApp

@@ -1,6 +1,11 @@
 package com.translateassist.service
 
 import android.app.Service
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build.VERSION
+import android.os.Build.VERSION_CODES
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
@@ -32,7 +37,40 @@ class OverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        promoteToForeground()
         createOverlay()
+    }
+
+    private fun promoteToForeground() {
+        val channelId = "translateassist_overlay"
+        if (VERSION.SDK_INT >= VERSION_CODES.O) {
+            val mgr = getSystemService(NotificationManager::class.java)
+            if (mgr?.getNotificationChannel(channelId) == null) {
+                val channel = NotificationChannel(channelId, "TranslateAssist Overlay", NotificationManager.IMPORTANCE_MIN).apply {
+                    description = "Keeps the floating translate button alive"
+                    setShowBadge(false)
+                    lockscreenVisibility = Notification.VISIBILITY_SECRET
+                }
+                mgr?.createNotificationChannel(channel)
+            }
+        }
+        val notification = if (VERSION.SDK_INT >= VERSION_CODES.O) {
+            Notification.Builder(this, channelId)
+        } else {
+            Notification.Builder(this)
+        }.setContentTitle("TranslateAssist active")
+            .setContentText("Floating translate button ready")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setOngoing(true)
+            .build()
+        try {
+            startForeground(1011, notification)
+        } catch (_: Exception) { /* ignore */ }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Ensure overlay persists if process killed; system attempts restart.
+        return START_STICKY
     }
 
     private fun createOverlay() {
@@ -108,6 +146,7 @@ class OverlayService : Service() {
         super.onDestroy()
         overlayView?.let { windowManager?.removeView(it) }
         instance = null
+    // Let system know we can restart if user still enabled overlay later.
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -17,7 +17,11 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            // Enable shrinking to allow stripping Log calls via proguard-rules.pro
+            minifyEnabled true
+            shrinkResources false // can set true after verifying no resource removal issues
+            // Use debug signing config for quick local install (NOT for production distribution)
+            signingConfig signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
