@@ -24,63 +24,15 @@
             android:contentDescription="@string/close"
             android:src="@drawable/ic_close" />
 
-        <!-- Language info -->
-        <TextView
-            android:id="@+id/language_info"
+        <!-- RecyclerView for original / translated line pairs -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/translation_list"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:gravity="center"
-            android:text="English → Gujarati"
-            android:textColor="#666666"
-            android:textSize="12sp" />
-
-        <!-- Original text -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/original_text"
-            android:textColor="#333333"
-            android:textSize="14sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/original_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:background="@drawable/text_background"
-            android:maxLines="4"
-            android:padding="12dp"
-            android:scrollbars="vertical"
-            android:text="Original text will appear here"
-            android:textColor="#444444"
-            android:textSize="14sp" />
-
-        <!-- Translated text -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/translated_text"
-            android:textColor="#333333"
-            android:textSize="14sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/translated_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:background="@drawable/text_background"
-            android:maxLines="4"
-            android:padding="12dp"
-            android:scrollbars="vertical"
-            android:text="Translation will appear here"
-            android:textColor="#444444"
-            android:textSize="16sp"
-            android:textStyle="bold" />
+            android:overScrollMode="ifContentScrolls"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp" />
 
         <!-- Copy button -->
         <Button

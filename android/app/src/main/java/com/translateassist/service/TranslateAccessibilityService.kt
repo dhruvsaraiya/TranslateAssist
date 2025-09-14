@@ -14,6 +14,8 @@ class TranslateAccessibilityService : AccessibilityService() {
         var onTextExtracted: ((String) -> Unit)? = null
     }
 
+    // Stateless mode: no persistent tracking of prior messages; each invocation processes what's visible.
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -82,9 +84,15 @@ class TranslateAccessibilityService : AccessibilityService() {
             Log.d(TAG, "Filtered to ${messageTexts.size} message texts: ${messageTexts.take(3)}")
             
             if (messageTexts.isNotEmpty()) {
-                val recentMessages = messageTexts.takeLast(3).joinToString("\n")
-                Log.d(TAG, "Sending message content: $recentMessages")
-                onTextExtracted?.invoke(recentMessages)
+                // Deduplicate within this invocation only, preserve original order of appearance.
+                val seen = LinkedHashSet<String>()
+                val uniqueOrdered = messageTexts.filter { seen.add(it) }
+                // Optionally cap to avoid overly large payloads; keep last N for relevance.
+                val MAX_VISIBLE_SEND = 8
+                val windowed = if (uniqueOrdered.size > MAX_VISIBLE_SEND) uniqueOrdered.takeLast(MAX_VISIBLE_SEND) else uniqueOrdered
+                val payload = windowed.joinToString("\n")
+                Log.d(TAG, "Sending VISIBLE messages (${windowed.size}/${uniqueOrdered.size} unique): $payload")
+                onTextExtracted?.invoke(payload)
             } else {
                 // Fallback - show debug info if no messages found
                 val debugText = "No clear messages found. All texts:\n" + 
@@ -323,4 +331,6 @@ class TranslateAccessibilityService : AccessibilityService() {
             return@filter true
         }
     }
+
+    // (Stateless) filterNewMessages removed.
 }

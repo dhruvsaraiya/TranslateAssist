@@ -12,9 +12,13 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.ImageButton
 import android.widget.TextView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import android.widget.Toast
 import com.translateassist.R
 import com.translateassist.translation.TranslationResult
+import com.translateassist.translation.TranslationLinePair
+import com.translateassist.translation.LineMode
 
 class TranslationPopup(private val context: Context) {
 
@@ -38,21 +42,33 @@ class TranslationPopup(private val context: Context) {
     private fun createPopupView(result: TranslationResult) {
         popupView = LayoutInflater.from(context).inflate(R.layout.translation_popup, null)
 
-        // Set up text views
-        val originalTextView = popupView?.findViewById<TextView>(R.id.original_text)
-        val translatedTextView = popupView?.findViewById<TextView>(R.id.translated_text)
-        val languageInfoView = popupView?.findViewById<TextView>(R.id.language_info)
+        // Setup RecyclerView for line pairs
+        val recycler = popupView?.findViewById<RecyclerView>(R.id.translation_list)
+        recycler?.layoutManager = LinearLayoutManager(context)
 
-        originalTextView?.text = result.originalText
-        translatedTextView?.text = result.translatedText
-        languageInfoView?.text = "${result.detectedLanguage} → ${result.translationType}"
+        val pairs: List<TranslationLinePair> = when {
+            result.linePairs.isNotEmpty() -> result.linePairs
+            result.originalText.isNotBlank() || result.translatedText.isNotBlank() -> listOf(
+                TranslationLinePair(result.originalText, result.translatedText, null, LineMode.TRANSLATED)
+            )
+            else -> emptyList()
+        }
+
+        val adapter = TranslationPairAdapter(pairs) { copiedLine ->
+            copyToClipboard(copiedLine)
+        }
+        recycler?.adapter = adapter
 
         // Set up buttons
         val copyButton = popupView?.findViewById<Button>(R.id.copy_button)
         val closeButton = popupView?.findViewById<ImageButton>(R.id.close_button)
 
         copyButton?.setOnClickListener {
-            copyToClipboard(result.translatedText)
+            // Copy all translated lines
+            val textToCopy = if (pairs.isNotEmpty()) {
+                pairs.joinToString("\n") { it.chosenText() }
+            } else result.translatedText
+            copyToClipboard(textToCopy)
         }
 
         closeButton?.setOnClickListener {

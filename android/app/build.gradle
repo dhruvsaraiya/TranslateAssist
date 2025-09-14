@@ -51,4 +51,10 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     
     // Removed Retrofit/Gson dependencies previously used for transliteration APIs.
+
+    // OkHttp for Google Input Tools transliteration API calls
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // RecyclerView for inline translation pair list
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
 }
