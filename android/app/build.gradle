@@ -3,9 +3,6 @@ plugins {
     id 'kotlin-android'
 }
 
-// Chaquopy must currently be applied using the legacy syntax (not the plugins DSL)
-apply plugin: 'com.chaquo.python'
-
 android {
     namespace 'com.translateassist'
     compileSdk 34
@@ -35,19 +32,7 @@ android {
     }
 }
 
-// Chaquopy Python configuration
-python {
-    // Enable pip to install dependencies into the APK
-    pip {
-        // ai4bharat-transliteration pulls in torch; consider using "--extra-index-url https://download.pytorch.org/whl/cpu" if size becomes large.
-        // For now, include only the transliteration package. You may later vendor just needed modules to reduce size.
-        install "ai4bharat-transliteration==0.7.2"
-    }
-
-    // Include additional pure-Python sources (wrapper code will be placed under src/main/python by default)
-    // buildPython can be set if a specific local Python should be used for building wheels.
-    // buildPython "C:/Path/To/Python/python.exe"
-}
+// Removed Chaquopy configuration (transliteration removed).
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
@@ -65,8 +50,5 @@ dependencies {
     // Coroutines for async operations
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     
-    // HTTP client for IndicTrans API
-    implementation 'com.squareup.retrofit2:retrofit:2.9.0'
-    implementation 'com.squareup.retrofit2:converter-gson:2.9.0'
-    implementation 'com.squareup.okhttp3:logging-interceptor:4.11.0'
+    // Removed Retrofit/Gson dependencies previously used for transliteration APIs.
 }

@@ -21,7 +21,7 @@ class TranslationEngine(private val context: Context) {
 
     private var englishToGujaratiTranslator: Translator? = null
     private val languageIdentifier = LanguageIdentification.getClient()
-    private val indicTransliterator = IndicTransTransliterator()
+    // Transliteration removed: only direct translation remains.
 
     init {
         initializeTranslators()
@@ -81,16 +81,6 @@ class TranslationEngine(private val context: Context) {
                         translatedText = text,
                         detectedLanguage = "Gujarati",
                         translationType = "Already in Gujarati"
-                    )
-                }
-                indicTransliterator.isRomanGujarati(text) -> {
-                    // Handle Roman Gujarati using IndicTrans
-                    val gujaratiScript = indicTransliterator.transliterateRomanToGujarati(text)
-                    TranslationResult(
-                        originalText = text,
-                        translatedText = gujaratiScript,
-                        detectedLanguage = "Roman Gujarati",
-                        translationType = "Roman → Gujarati (IndicTrans)"
                     )
                 }
                 else -> {

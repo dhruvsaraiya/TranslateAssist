@@ -6,7 +6,7 @@ A personal-use Android app that provides real-time Gujarati translation for What
 
 - **Floating Overlay Button**: Draggable button that stays on top of WhatsApp
 - **Smart Text Extraction**: Reads WhatsApp messages using accessibility services
-- **Gujarati Translation**: Supports English to Gujarati and Roman Gujarati to Gujarati script
+- **Gujarati Translation**: Supports English to Gujarati
 - **On-Demand Translation**: Only activates when you tap the overlay button
 - **Text Selection Support**: Can translate selected text or recent messages
 - **Copy Functionality**: Easy copy translated text to clipboard
@@ -76,8 +76,7 @@ A personal-use Android app that provides real-time Gujarati translation for What
 
 ### Supported Languages
 - **English → Gujarati**: Full translation support
-- **Roman Gujarati → Gujarati Script**: Transliteration from English letters to Gujarati script
-- **Gujarati → Gujarati**: Detects and displays as-is
+- **Gujarati (already Gujarati)**: Displayed as-is
 
 ## How It Works
 
@@ -101,11 +100,10 @@ WhatsApp Text → Accessibility Service → Language Detection → Translation E
 5. Passes text to translation engine
 
 ### Translation Process
-1. Detect input language (English, Gujarati, or Roman Gujarati)
+1. Detect input language (English or Gujarati)
 2. For English: Translate to Gujarati using ML Kit
-3. For Roman Gujarati: Transliterate to Gujarati script
-4. For Gujarati: Display as-is
-5. Show result in popup with copy option
+3. For Gujarati: Display as-is
+4. Show result in popup with copy option
 
 ## Privacy & Security
 
@@ -151,54 +149,11 @@ WhatsApp Text → Accessibility Service → Language Detection → Translation E
 - `BIND_ACCESSIBILITY_SERVICE`: For reading WhatsApp text
 - `INTERNET`: For downloading translation models
 - `FOREGROUND_SERVICE`: For persistent overlay service
-
 ### Dependencies
 - Google ML Kit Translation: Offline translation
 - Google ML Kit Language ID: Language detection
 - AndroidX libraries: Modern Android development
-
-## Limitations
-
-- **WhatsApp Only**: Currently designed specifically for WhatsApp
-- **Android Only**: Not available for iOS
-- **Personal Use**: Not intended for Play Store distribution
-- **Recent Messages**: Accessibility service can only read visible text
-- **Language Support**: Currently focuses on English-Gujarati translation
-
-## Future Enhancements
-
-Potential improvements (not implemented):
-- Support for other messaging apps
-- More language pairs
-- Better Roman Gujarati detection
-- Text size adjustment
-- Theme customization
-- Translation history
-
-## Offline Gujarati Transliteration (Python / Chaquopy)
-
-An experimental offline Roman Gujarati → Gujarati script transliteration path has been added using the `ai4bharat-transliteration` Python package embedded via [Chaquopy](https://chaquo.com/chaquopy/).
-
-### How it Works
-1. On first use, the app tries to run the embedded Python function `transliteration_engine.transliterate()`.
-2. If the Python engine (and required model) produces Gujarati output, that result is used (no network call).
-3. If the Python path fails (missing model / dependency trimmed / runtime error) the app falls back to the AI4Bharat HTTP APIs (batch then word-by-word). If both fail, the original text is returned unchanged.
-
-### Project Changes
-- Added Chaquopy plugin and `python {}` block in `app/build.gradle`.
-- Added `android/app/src/main/python/transliteration_engine.py` wrapper.
-- Added Kotlin bridge `PythonTransliterator.kt` which executes calls on `Dispatchers.IO`.
-- Updated `IndicTransTransliterator` to attempt offline path first.
-- Created assets directory `app/src/main/assets/xlit/gu/` for future placement of pruned Gujarati model files.
-
-### APK Size Considerations
-`ai4bharat-transliteration` depends on PyTorch which can drastically inflate the APK (tens of MB). To mitigate:
-- Prune: Vendor only necessary model and Python modules (remove other language weights).
-- Use CPU-only minimal Torch build or explore exporting the transliteration model to ONNX and loading it with an on-device inference runtime.
-- Consider lazy feature delivery or a separate downloadable model pack.
-
-For now, the reference implementation prioritizes correctness. Before production, inspect the generated APK / AAB size after enabling this feature.
-
+<!-- Transliteration feature removed: documentation simplified to translation-only scope. -->
 ### Model Files
 Place Gujarati-specific tokenizer and weight files (if manually pruning) inside:
 ```
