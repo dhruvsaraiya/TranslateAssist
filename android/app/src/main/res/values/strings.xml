@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">TranslateAssist</string>
+    <string name="app_name">ગુજરાતી</string>
     <string name="translate_button">Translate Button</string>
     <string name="start_overlay">Start Overlay</string>
     <string name="enable_accessibility">Enable Accessibility Service</string>

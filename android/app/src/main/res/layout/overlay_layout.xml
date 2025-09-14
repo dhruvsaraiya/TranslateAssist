@@ -5,12 +5,9 @@
 
     <ImageView
         android:id="@+id/overlay_button"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:background="@drawable/overlay_button_background"
-        android:src="@drawable/ic_translate"
-        android:scaleType="centerInside"
-        android:padding="12dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/overlay_button_background_gray"
         android:contentDescription="@string/translate_button" />
 
 </FrameLayout>

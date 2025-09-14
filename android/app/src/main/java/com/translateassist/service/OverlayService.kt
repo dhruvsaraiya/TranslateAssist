@@ -40,7 +40,8 @@ class OverlayService : Service() {
 
         // Create overlay view
         overlayView = LayoutInflater.from(this).inflate(R.layout.overlay_layout, null)
-        val overlayButton = overlayView?.findViewById<ImageView>(R.id.overlay_button)
+    // If you add a custom drawable (e.g., shree.png) place it in res/drawable or mipmap
+    // and set android:src in overlay_layout.xml. No dynamic base64 decode now.
 
         // Set up window parameters
         val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

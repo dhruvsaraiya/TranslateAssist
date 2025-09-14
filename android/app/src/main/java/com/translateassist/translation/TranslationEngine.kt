@@ -20,7 +20,7 @@ class TranslationEngine(private val context: Context) {
     }
 
     private var englishToGujaratiTranslator: Translator? = null
-    private val languageIdentifier = LanguageIdentification.getClient()
+    private var languageIdentifier = LanguageIdentification.getClient()
     private val transliterator = Transliterator()
 
     init {
@@ -158,6 +158,7 @@ class TranslationEngine(private val context: Context) {
     }
 
     private suspend fun processSingle(text: String): TranslationResult {
+        ensureLanguageIdentifier()
         val languageCode = identifyLanguage(text)
         val hasLatin = text.any { (it in 'a'..'z') || (it in 'A'..'Z') }
         val hasGujarati = text.any { ch -> ch.code in 0x0A80..0x0AFF }
@@ -181,11 +182,7 @@ class TranslationEngine(private val context: Context) {
         }
 
         // Fallback for other scripts: attempt translation (will often be unsupported for non-EN sources)
-        val translated = suspendCoroutine<String?> { continuation ->
-            englishToGujaratiTranslator?.translate(text)
-                ?.addOnSuccessListener { result -> continuation.resume(result) }
-                ?.addOnFailureListener { continuation.resume(null) }
-        }
+    val translated = safeTranslate(text)
         return TranslationResult(
             originalText = text,
             translatedText = translated ?: "Translation not supported",
@@ -196,11 +193,7 @@ class TranslationEngine(private val context: Context) {
     }
     private suspend fun processEnglishLine(text: String): TranslationResult {
         Log.d(TAG, "EN line start | original='${text.take(200)}'")
-        val translationOut = suspendCoroutine<String?> { continuation ->
-            englishToGujaratiTranslator?.translate(text)
-                ?.addOnSuccessListener { result -> continuation.resume(result) }
-                ?.addOnFailureListener { continuation.resume(null) }
-        } ?: "Translation failed"
+    val translationOut = safeTranslate(text) ?: "Translation failed"
         Log.d(TAG, "EN line translation complete | originalSnippet='${text.take(60)}' | translation='${translationOut.take(200)}'")
         val transliterationOut = transliterator.transliterateToGujarati(text)
         Log.d(TAG, "EN line transliteration attempt | originalSnippet='${text.take(60)}' | transliteration='${transliterationOut?.take(200)}'")
@@ -219,22 +212,68 @@ class TranslationEngine(private val context: Context) {
     private suspend fun identifyLanguage(text: String): String {
         return try {
             val languageCode = suspendCoroutine<String> { continuation ->
-                languageIdentifier.identifyLanguage(text)
-                    .addOnSuccessListener { result -> continuation.resume(result) }
-                    .addOnFailureListener { continuation.resume("und") }
+                try {
+                    languageIdentifier.identifyLanguage(text)
+                        .addOnSuccessListener { result -> continuation.resume(result) }
+                        .addOnFailureListener { continuation.resume("und") }
+                } catch (e: IllegalStateException) {
+                    // Re-init and fallback
+                    Log.w(TAG, "LanguageIdentifier was closed; recreating")
+                    languageIdentifier = LanguageIdentification.getClient()
+                    continuation.resume("und")
+                }
             }
             if (languageCode == "und") TranslateLanguage.ENGLISH else languageCode
         } catch (e: Exception) {
-            Log.e(TAG, "Language identification failed", e)
+            Log.w(TAG, "Language identification failed (soft)", e)
             TranslateLanguage.ENGLISH
+        }
+    }
+
+    // Ensure languageIdentifier not closed
+    private fun ensureLanguageIdentifier() {
+        // No direct API to check closed state; we lazily recreate on IllegalStateException inside identifyLanguage.
+        // Placeholder if future explicit state tracking is needed.
+    }
+
+    // Safe translation with one retry if translator was closed
+    private suspend fun safeTranslate(text: String): String? {
+        ensureTranslator()
+        var attempt = 0
+        var last: String? = null
+        while (attempt < 2) { // try at most twice (initial + 1 re-init)
+            val result = suspendCoroutine<String?> { continuation ->
+                try {
+                    englishToGujaratiTranslator?.translate(text)
+                        ?.addOnSuccessListener { r -> continuation.resume(r) }
+                        ?.addOnFailureListener { _ -> continuation.resume(null) }
+                } catch (e: IllegalStateException) {
+                    continuation.resume(null)
+                }
+            }
+            if (result != null) return result
+            // If translator might be closed, re-init and retry
+            attempt++
+            if (attempt < 2) {
+                Log.w(TAG, "Reinitializing translator after failure/closed state (attempt=$attempt)")
+                initializeTranslators()
+            }
+            last = result
+        }
+        return last
+    }
+
+    private fun ensureTranslator() {
+        if (englishToGujaratiTranslator == null) {
+            initializeTranslators()
         }
     }
 
 
 
     fun cleanup() {
-        englishToGujaratiTranslator?.close()
-        languageIdentifier.close()
+        try { englishToGujaratiTranslator?.close() } catch (_: Exception) {}
+        try { languageIdentifier.close() } catch (_: Exception) {}
     }
 }
 

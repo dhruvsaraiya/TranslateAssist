@@ -280,56 +280,76 @@ class TranslateAccessibilityService : AccessibilityService() {
      * Filter out UI elements and keep only actual message content
      */
     private fun filterMessageContent(allTexts: List<String>): List<String> {
-        return allTexts.filter { text ->
-            // Skip content descriptions (marked with "CD:")
-            if (text.startsWith("CD:")) return@filter false
-            
-            // Skip very short text (likely UI elements)
-            if (text.length < 3) return@filter false
-            
-            // Skip common UI patterns
-            val skipPatterns = listOf(
-                "text message", "send", "type a message", "compose", "attach",
-                "more options", "back", "search", "call", "video call",
-                "emoji", "voice message", "gallery", "contact", "location",
-                "thumbs up", "reaction", "texting with", "sms/mms", "show attach",
-                "you said", "delivered", "read", "typing"
-            )
-            
-            if (skipPatterns.any { pattern -> 
-                text.lowercase().contains(pattern.lowercase()) 
-            }) {
-                return@filter false
+        return allTexts.map { it.replace("\u200C", "").trim() } // remove zero-width non-joiner, trim
+            .filter { text ->
+                if (text.isBlank()) return@filter false
+                // Skip content descriptions (marked with "CD:")
+                if (text.startsWith("CD:")) return@filter false
+
+                val lower = text.lowercase()
+
+                // Skip very short (except allow common acknowledgements like ok, હા, ઓકે, etc.)
+                val shortAllow = setOf("ok", "okk", "haan", "ha", "yes", "na", "no")
+                if (text.length < 2) return@filter false
+                if (text.length < 3 && lower !in shortAllow) return@filter false
+
+                // UI / structural patterns
+                val skipContains = listOf(
+                    "text message", "type a message", "compose", "attach", "more options",
+                    "back", "search", "call", "video call", "emoji", "voice message",
+                    "gallery", "contact", "location", "thumbs up", "reaction", "texting with",
+                    "sms/mms", "show attach", "you said", "delivered", "read", "typing",
+                    "only admins can send messages"
+                )
+                if (skipContains.any { lower.contains(it) }) return@filter false
+
+                // Exact equals / metadata tokens
+                val skipExact = setOf("you", "message", "yesterday", "today")
+                if (lower in skipExact) return@filter false
+
+                // Participants summary (e.g., "35 others") or line mentioning "others"
+                if (lower.matches(Regex(".*\\bothers\\b.*"))) return@filter false
+
+                // Group presence indicators: "2 online", "3 online" etc.
+                if (lower.matches(Regex("^\\d+\\s+online$"))) return@filter false
+
+                // Media size indicators (e.g., 20 KB, 3 MB) which correspond to image/file placeholders
+                if (lower.matches(Regex("^\\d+(?:\\.\\d+)?\\s?(kb|mb|gb)$"))) return@filter false
+
+                // Page count lines (e.g., "4 pages", "1 page")
+                if (lower.matches(Regex("^\\d+\\s+pages?$"))) return@filter false
+
+                // File attachment names with common extensions (avoid treating as message text)
+                if (lower.matches(Regex("^.+\\.(pdf|docx?|pptx?|xls[xm]?|jpg|jpeg|png|gif|mp4|mp3|zip|rar)$"))) return@filter false
+
+                // All-caps UI/command labels (length >4 to avoid removing short ACKs like OK, YES)
+                if (text.length > 4 && text.none { it.isLowerCase() } && text.any { it.isLetter() } && !text.any { ch -> ch.code in 0x0A80..0x0AFF }) {
+                    // Permit if it contains Gujarati script (handled above) else skip
+                    return@filter false
+                }
+
+                // Phone numbers / contacts (international / local patterns)
+                if (text.matches(Regex("^\\+?\\d[\\d\\s-]{6,}$"))) return@filter false
+                // WhatsApp sometimes formats numbers with spaces: +91 12345 67890
+                if (text.matches(Regex("^\\+?\\d{2,3}\\s?\\d{3,5}\\s?\\d{3,5}"))) return@filter false
+
+                // Line starting with tilde or hyphen indicating author label: "~ Dhruv Saraiya"
+                if (text.startsWith("~") || text.startsWith("- ")) return@filter false
+
+                // Time pattern (09:13 PM / 9:13)
+                if (text.matches(Regex("^\\d{1,2}:\\d{2}(?:\\s?(?:AM|PM|am|pm))?$"))) return@filter false
+
+                // Predominantly digits/punctuation
+                val letters = text.count { it.isLetter() }
+                val digits = text.count { it.isDigit() }
+                if (letters == 0) return@filter false
+                if (letters > 0 && digits > 0 && digits > letters * 2) return@filter false
+
+                // All caps short tokens (likely UI) e.g., GIF, JPG
+                if (text.all { !it.isLetter() || it.isUpperCase() } && text.length <= 4) return@filter false
+
+                true
             }
-            
-            // Skip time patterns (e.g., "9:13 PM", "12:34")
-            if (text.matches(Regex(".*\\d{1,2}:\\d{2}\\s*(AM|PM|am|pm).*"))) {
-                return@filter false
-            }
-            
-            // Skip phone number patterns
-            if (text.matches(Regex(".*\\(\\d{3}\\)\\s*\\d{3}-\\d{4}.*"))) {
-                return@filter false
-            }
-            
-            // Skip single characters or numbers
-            if (text.matches(Regex("^[\\d\\s]*$")) && text.length < 4) {
-                return@filter false
-            }
-            
-            // Must contain letters (actual text content)
-            if (!text.any { it.isLetter() }) {
-                return@filter false
-            }
-            
-            // Skip if all caps and short (likely UI button)
-            if (text.all { !it.isLetter() || it.isUpperCase() } && text.length < 15) {
-                return@filter false
-            }
-            
-            // This looks like actual message content
-            return@filter true
-        }
     }
 
     // (Stateless) filterNewMessages removed.
