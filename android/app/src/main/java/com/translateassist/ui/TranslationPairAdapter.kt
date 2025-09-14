@@ -9,9 +9,26 @@ import com.translateassist.R
 import com.translateassist.translation.TranslationLinePair
 
 class TranslationPairAdapter(
-    private val pairs: List<TranslationLinePair>,
+    initialPairs: List<TranslationLinePair>,
     private val onCopyLine: ((String) -> Unit)? = null
 ) : RecyclerView.Adapter<TranslationPairAdapter.PairVH>() {
+
+    private val pairs: MutableList<TranslationLinePair> = initialPairs.toMutableList()
+
+    fun addPair(pair: TranslationLinePair) {
+        val pos = pairs.size
+        pairs.add(pair)
+        notifyItemInserted(pos)
+    }
+
+    fun addPairs(newPairs: List<TranslationLinePair>) {
+        if (newPairs.isEmpty()) return
+        val start = pairs.size
+        pairs.addAll(newPairs)
+        notifyItemRangeInserted(start, newPairs.size)
+    }
+
+    fun getAllPairs(): List<TranslationLinePair> = pairs.toList()
 
     class PairVH(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val original: TextView = itemView.findViewById(R.id.original_line)

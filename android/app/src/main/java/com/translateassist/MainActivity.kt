@@ -100,8 +100,14 @@ class MainActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.Main).launch {
             try {
-                val result = translationEngine.translateText(text)
-                translationPopup.showTranslation(result)
+                // Start streaming popup
+                translationPopup.startStreaming()
+                val full = translationEngine.translateTextStreaming(text) { pair ->
+                    // Ensure on main thread for UI update
+                    runOnUiThread { translationPopup.appendStreamingPair(pair) }
+                }
+                // Finalize (hide loader if still visible)
+                translationPopup.finalizeStreaming()
             } catch (e: Exception) {
                 Toast.makeText(this@MainActivity, "Translation failed: ${e.message}", Toast.LENGTH_SHORT).show()
             }

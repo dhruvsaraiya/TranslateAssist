@@ -71,6 +71,52 @@ class TranslationEngine(private val context: Context) {
         }
     }
 
+    /**
+     * Streaming version: invokes onPair for each processed line pair as soon as it's ready.
+     * Returns the full aggregated TranslationResult at the end.
+     */
+    suspend fun translateTextStreaming(text: String, onPair: (TranslationLinePair) -> Unit): TranslationResult {
+        return try {
+            if (!text.contains('\n')) {
+                val single = processSingle(text)
+                single.linePairs.firstOrNull()?.let { onPair(it) }
+                single
+            } else {
+                val lines = text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+                if (lines.isEmpty()) return processSingle(text)
+                val collectedPairs = mutableListOf<TranslationLinePair>()
+                val translatedAggregated = mutableListOf<String>()
+                var hasOriginalOnly = true
+                for (line in lines) {
+                    val child = processSingle(line)
+                    val pair = child.linePairs.firstOrNull() ?: TranslationLinePair(line, child.translatedText, null, LineMode.TRANSLATED)
+                    collectedPairs += pair
+                    translatedAggregated += child.translatedText
+                    if (child.translationType != "Original") hasOriginalOnly = false
+                    // Emit incrementally
+                    onPair(pair)
+                }
+                val combined = translatedAggregated.joinToString("\n")
+                val typeSummary = if (hasOriginalOnly) "Original" else "Mixed"
+                TranslationResult(
+                    originalText = text,
+                    translatedText = combined,
+                    detectedLanguage = "",
+                    translationType = typeSummary,
+                    linePairs = collectedPairs
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Streaming translation error", e)
+            TranslationResult(
+                originalText = text,
+                translatedText = "Translation error: ${e.message}",
+                detectedLanguage = "Unknown",
+                translationType = "Error"
+            )
+        }
+    }
+
     private suspend fun processMultiLine(text: String): TranslationResult {
         val lines = text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
         if (lines.isEmpty()) return processSingle(text)

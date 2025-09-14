@@ -39,12 +39,54 @@ class TranslationPopup(private val context: Context) {
         showPopup()
     }
 
+    /**
+     * Streaming version: show popup immediately with loader, then feed line pairs one-by-one.
+     * Call finalizeStreaming() when done to hide loader (if not already) and enable copy button.
+     */
+    fun startStreaming(onCopyAll: (() -> String)? = null) {
+        if (isShowing) hidePopup()
+        popupView = LayoutInflater.from(context).inflate(R.layout.translation_popup, null)
+        val recycler = popupView?.findViewById<RecyclerView>(R.id.translation_list)
+        recycler?.layoutManager = LinearLayoutManager(context)
+        val adapter = TranslationPairAdapter(emptyList()) { copiedLine -> copyToClipboard(copiedLine) }
+        recycler?.adapter = adapter
+        popupView?.findViewById<View>(R.id.loading_overlay)?.visibility = View.VISIBLE
+        popupView?.findViewById<Button>(R.id.copy_button)?.isEnabled = false
+        popupView?.findViewById<Button>(R.id.copy_button)?.setOnClickListener {
+            val all = onCopyAll?.invoke()?.ifBlank { "" } ?: adapter.getAllPairs().joinToString("\n") { it.chosenText() }
+            if (all.isNotBlank()) copyToClipboard(all)
+        }
+        popupView?.findViewById<ImageButton>(R.id.close_button)?.setOnClickListener { hidePopup() }
+        popupView?.setOnClickListener { hidePopup() }
+        popupView?.findViewById<View>(R.id.popup_content)?.setOnClickListener { }
+        showPopup()
+    }
+
+    fun appendStreamingPair(pair: TranslationLinePair) {
+        val recycler = popupView?.findViewById<RecyclerView>(R.id.translation_list) ?: return
+        val adapter = recycler.adapter as? TranslationPairAdapter ?: return
+        val loading = popupView?.findViewById<View>(R.id.loading_overlay)
+        val wasEmpty = adapter.itemCount == 0
+        adapter.addPair(pair)
+        if (wasEmpty) {
+            loading?.visibility = View.GONE
+        }
+        recycler.scrollToPosition(adapter.itemCount - 1)
+    }
+
+    fun finalizeStreaming() {
+        popupView?.findViewById<View>(R.id.loading_overlay)?.visibility = View.GONE
+        popupView?.findViewById<Button>(R.id.copy_button)?.isEnabled = true
+    }
+
     private fun createPopupView(result: TranslationResult) {
         popupView = LayoutInflater.from(context).inflate(R.layout.translation_popup, null)
 
         // Setup RecyclerView for line pairs
         val recycler = popupView?.findViewById<RecyclerView>(R.id.translation_list)
         recycler?.layoutManager = LinearLayoutManager(context)
+
+        val loadingOverlay = popupView?.findViewById<View>(R.id.loading_overlay)
 
         val basePairs: List<TranslationLinePair> = when {
             result.linePairs.isNotEmpty() -> result.linePairs
@@ -53,27 +95,41 @@ class TranslationPopup(private val context: Context) {
             )
             else -> emptyList()
         }
+        val orderedPairs = if (basePairs.size > 1) basePairs.asReversed() else basePairs
 
-        // Ensure chronological order: oldest message first, newest last.
-        // Current symptom: newest appearing at top -> reverse only if we detect likely reversed order.
-        // Simple approach: assume incoming is newest-first if last message was showing first; so reorder here.
-        val pairs = if (basePairs.size > 1) basePairs.asReversed() else basePairs
-
-        val adapter = TranslationPairAdapter(pairs) { copiedLine ->
-            copyToClipboard(copiedLine)
-        }
+    val adapter = TranslationPairAdapter(emptyList()) { copiedLine -> copyToClipboard(copiedLine) }
         recycler?.adapter = adapter
+
+        // Show loader while starting incremental rendering
+        loadingOverlay?.visibility = View.VISIBLE
+
+        // Incrementally add items (simple posting loop). Could be improved with coroutines if needed.
+        if (orderedPairs.isEmpty()) {
+            loadingOverlay?.visibility = View.GONE
+        } else {
+            recycler?.post {
+                orderedPairs.forEachIndexed { index, pair ->
+                    recycler.postDelayed({
+                        if (index == 0) loadingOverlay?.visibility = View.GONE
+                        adapter.addPair(pair)
+                        recycler.scrollToPosition(adapter.itemCount - 1)
+                    }, (index * 40L)) // 40ms stagger for perception; adjust as desired
+                }
+            }
+        }
 
         // Set up buttons
         val copyButton = popupView?.findViewById<Button>(R.id.copy_button)
         val closeButton = popupView?.findViewById<ImageButton>(R.id.close_button)
 
         copyButton?.setOnClickListener {
-            // Copy all translated lines in display order (chronological)
-            val textToCopy = if (pairs.isNotEmpty()) {
-                pairs.joinToString("\n") { it.chosenText() }
-            } else result.translatedText
-            copyToClipboard(textToCopy)
+            // Copy all (current) translated lines in display order
+            val textToCopy = StringBuilder().apply {
+                // Access adapter items reflectively (we didn't expose list; could add getter)
+            }.toString().ifBlank { result.translatedText }
+            // Simpler: rebuild from result source for now
+            val allFromResult = orderedPairs.joinToString("\n") { it.chosenText() }
+            copyToClipboard(if (allFromResult.isNotBlank()) allFromResult else result.translatedText)
         }
 
         closeButton?.setOnClickListener {

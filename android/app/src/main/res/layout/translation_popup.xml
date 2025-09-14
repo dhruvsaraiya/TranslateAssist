@@ -4,6 +4,21 @@
     android:layout_height="match_parent"
     android:background="#80000000">
 
+    <!-- Loading overlay -->
+    <FrameLayout
+        android:id="@+id/loading_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#80000000"
+        android:visibility="gone">
+        <ProgressBar
+            android:id="@+id/progress_bar"
+            style="@android:style/Widget.Material.ProgressBar.Large"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center" />
+    </FrameLayout>
+
     <LinearLayout
         android:id="@+id/popup_content"
         android:layout_width="match_parent"
