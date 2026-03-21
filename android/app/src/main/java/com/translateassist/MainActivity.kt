@@ -8,6 +8,9 @@ import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
+import android.content.pm.PackageManager
 import androidx.appcompat.app.AppCompatActivity
 import com.translateassist.service.OverlayService
 import com.translateassist.service.TranslateAccessibilityService
@@ -152,7 +155,16 @@ class MainActivity : AppCompatActivity() {
     private fun toggleOverlayService() {
         val intent = Intent(this, OverlayService::class.java)
         if (OverlayService.instance == null) {
-            startService(intent)
+            if (!ensureNotificationPermissionIfNeeded()) {
+                Toast.makeText(this, "Allow notifications so the overlay can stay running", Toast.LENGTH_LONG).show()
+                updateStatus()
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
             overlayButton.text = "Stop Overlay"
         } else {
             stopService(intent)
@@ -174,11 +186,17 @@ class MainActivity : AppCompatActivity() {
             if (TranslateAccessibilityService.instance != null) "Active" else "Enabled (waiting)"
         } else "Disabled"
         val overlayPermission = if (hasOverlayPermission()) "Granted" else "Not Granted"
+        val notifPermission = when {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> "Not required"
+            hasNotificationPermission() -> "Granted"
+            else -> "Not Granted"
+        }
         val appName = getString(R.string.app_name)
         statusText.text = """
             Overlay Service: $overlayStatus
             Accessibility Service: $accessibilityStatus  
             Overlay Permission: $overlayPermission
+            Notification Permission: $notifPermission
 
             Setup Steps:
             1. Tap 'Start Overlay' to grant overlay permission
@@ -193,9 +211,14 @@ class MainActivity : AppCompatActivity() {
         overlayButton.isEnabled = hasOverlayPermission()
 
         // Auto-start overlay if user swiped app away and reopened, while permissions intact
-        if (hasOverlayPermission() && OverlayService.instance == null && accessibilitySystemEnabled) {
+        if (hasOverlayPermission() && OverlayService.instance == null && accessibilitySystemEnabled && ensureNotificationPermissionIfNeeded()) {
             // Lightweight auto start; user already approved permissions previously
-            startService(Intent(this, OverlayService::class.java))
+            val serviceIntent = Intent(this, OverlayService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
             overlayButton.text = "Stop Overlay"
         }
     }
@@ -217,6 +240,32 @@ class MainActivity : AppCompatActivity() {
         if (!hasOverlayPermission()) {
             showPermissionExplanationDialog()
         }
+
+        // Request notifications permission on Android 13+ so foreground service notification can be posted.
+        ensureNotificationPermissionIfNeeded()
+    }
+
+    private fun hasNotificationPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
+    /**
+     * Returns true if notifications are either not required or already granted.
+     * If not granted, triggers a one-time permission prompt and returns false.
+     */
+    private fun ensureNotificationPermissionIfNeeded(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        if (hasNotificationPermission()) return true
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_NOTIFICATIONS_PERMISSION
+        )
+        return false
     }
     
     private fun showPermissionExplanationDialog() {
@@ -250,5 +299,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQUEST_OVERLAY_PERMISSION = 1001
+        private const val REQUEST_NOTIFICATIONS_PERMISSION = 1002
     }
 }

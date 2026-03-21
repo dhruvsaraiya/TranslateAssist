@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.translateassist.R
+import com.translateassist.translation.LineMode
 import com.translateassist.translation.TranslationLinePair
 
 class TranslationPairAdapter(
@@ -45,8 +46,8 @@ class TranslationPairAdapter(
     override fun onBindViewHolder(holder: PairVH, position: Int) {
         val item = pairs[position]
         holder.original.text = item.original
-        val translationLine = item.translation ?: "—"
-        val transliterationLine = item.transliteration ?: "—"
+        val translationLine = item.translation ?: if (item.chosenMode == LineMode.ORIGINAL) "—" else "failed"
+        val transliterationLine = item.transliteration ?: if (item.chosenMode == LineMode.ORIGINAL) "—" else "failed"
         holder.translated.text = "TR: $translationLine"
         holder.transliterated?.let { tlView ->
             tlView.visibility = View.VISIBLE

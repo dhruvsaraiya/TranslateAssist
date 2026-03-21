@@ -3,14 +3,24 @@ package com.translateassist.translation
 import android.content.Context
 import android.util.Log
 import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.languageid.LanguageIdentification
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
+import com.google.mlkit.nl.translate.TranslateRemoteModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import com.google.android.gms.tasks.Task
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
 class TranslationEngine(private val context: Context) {
@@ -22,6 +32,9 @@ class TranslationEngine(private val context: Context) {
     private var englishToGujaratiTranslator: Translator? = null
     private var languageIdentifier = LanguageIdentification.getClient()
     private val transliterator = Transliterator()
+    private val modelMutex = Mutex()
+    private var modelReady: Boolean = false
+    private var didForceRedownloadOnce: Boolean = false
 
     init {
         initializeTranslators()
@@ -40,17 +53,88 @@ class TranslationEngine(private val context: Context) {
     }
 
     private fun downloadModels() {
-        val conditions = DownloadConditions.Builder()
-            .requireWifi()
-            .build()
+        // Default to allowing any network. On some devices a Wi-Fi-only requirement results in a
+        // model that never finishes downloading, and translation then fails at runtime.
+        val conditions = DownloadConditions.Builder().build()
 
         englishToGujaratiTranslator?.downloadModelIfNeeded(conditions)
             ?.addOnSuccessListener {
-                Log.d(TAG, "English to Gujarati translation model downloaded")
+                modelReady = true
+                Log.d(TAG, "English↔Gujarati translation model ready")
             }
             ?.addOnFailureListener { exception ->
+                modelReady = false
                 Log.e(TAG, "Failed to download translation model", exception)
             }
+    }
+
+    private suspend fun ensureModelReady(): Boolean {
+        val translator = englishToGujaratiTranslator ?: run {
+            initializeTranslators()
+            englishToGujaratiTranslator
+        } ?: return false
+
+        if (modelReady) return true
+
+        return modelMutex.withLock {
+            if (modelReady) return@withLock true
+            try {
+                val conditions = DownloadConditions.Builder().build()
+                // Don't block the whole pipeline indefinitely. If the model isn't ready quickly,
+                // we let transliteration proceed and translation can succeed later.
+                val ok = withTimeoutOrNull(1500L) {
+                    awaitTaskCancellable(translator.downloadModelIfNeeded(conditions))
+                    true
+                } ?: false
+                modelReady = ok
+                if (!ok) Log.w(TAG, "Model not ready yet (timeout); will retry later")
+                ok
+            } catch (e: Exception) {
+                modelReady = false
+                Log.e(TAG, "Model download/ready check failed", e)
+                false
+            }
+        }
+    }
+
+    private suspend fun forceRedownloadModels() {
+        modelMutex.withLock {
+            modelReady = false
+            val manager = RemoteModelManager.getInstance()
+            try {
+                // Delete both language models to ensure the bilingual pack is rebuilt cleanly.
+                withTimeoutOrNull(4000L) {
+                    awaitTaskCancellable(manager.deleteDownloadedModel(TranslateRemoteModel.Builder(TranslateLanguage.ENGLISH).build()))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to delete EN model (non-fatal)", e)
+            }
+            try {
+                withTimeoutOrNull(4000L) {
+                    awaitTaskCancellable(manager.deleteDownloadedModel(TranslateRemoteModel.Builder(TranslateLanguage.GUJARATI).build()))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to delete GU model (non-fatal)", e)
+            }
+
+            // Recreate translator and download again.
+            initializeTranslators()
+            val translator = englishToGujaratiTranslator ?: return@withLock
+            val conditions = DownloadConditions.Builder().build()
+            val ok = withTimeoutOrNull(8000L) {
+                awaitTaskCancellable(translator.downloadModelIfNeeded(conditions))
+                true
+            } ?: false
+            modelReady = ok
+        }
+    }
+
+    private suspend fun <T> awaitTaskCancellable(task: Task<T>): T = suspendCancellableCoroutine { continuation ->
+        task.addOnSuccessListener { result ->
+            if (continuation.isActive) continuation.resume(result)
+        }.addOnFailureListener { exception ->
+            if (continuation.isActive) continuation.resumeWithException(exception)
+        }
     }
 
     suspend fun translateText(text: String): TranslationResult {
@@ -193,18 +277,45 @@ class TranslationEngine(private val context: Context) {
     }
     private suspend fun processEnglishLine(text: String): TranslationResult {
         Log.d(TAG, "EN line start | original='${text.take(200)}'")
-    val translationOut = safeTranslate(text) ?: "Translation failed"
-        Log.d(TAG, "EN line translation complete | originalSnippet='${text.take(60)}' | translation='${translationOut.take(200)}'")
-        val transliterationOut = transliterator.transliterateToGujarati(text)
-        Log.d(TAG, "EN line transliteration attempt | originalSnippet='${text.take(60)}' | transliteration='${transliterationOut?.take(200)}'")
-        val chosenMode = if (!transliterationOut.isNullOrBlank()) LineMode.TRANSLITERATED else LineMode.TRANSLATED
-        val chosenText = if (chosenMode == LineMode.TRANSLITERATED) transliterationOut!! else translationOut
+        // TR and TL must be independent: failure/timeout of one must not block the other.
+        val (translationOut, transliterationOut) = supervisorScope {
+            val trDeferred = async {
+                // TR: ML Kit path (may depend on model download)
+                withTimeoutOrNull(6500L) { safeTranslate(text) }
+            }
+            val tlDeferred = async {
+                // TL: network phonetic transliteration
+                withTimeoutOrNull(6500L) { transliterator.transliterateToGujarati(text) }
+            }
+            val tr = runCatching { trDeferred.await() }.getOrNull()
+            val tl = runCatching { tlDeferred.await() }.getOrNull()
+            Pair(tr, tl)
+        }
+
+        Log.d(TAG, "EN line TR complete | originalSnippet='${text.take(60)}' | tr='${translationOut?.take(200)}'")
+        Log.d(TAG, "EN line TL complete | originalSnippet='${text.take(60)}' | tl='${transliterationOut?.take(200)}'")
+
+        val chosenMode = when {
+            !transliterationOut.isNullOrBlank() -> LineMode.TRANSLITERATED
+            !translationOut.isNullOrBlank() -> LineMode.TRANSLATED
+            else -> LineMode.ORIGINAL
+        }
+        val chosenText = when (chosenMode) {
+            LineMode.TRANSLITERATED -> transliterationOut!!
+            LineMode.TRANSLATED -> translationOut!!
+            LineMode.ORIGINAL -> text
+        }
         Log.d(TAG, "EN line decision | mode=$chosenMode | chosen='${chosenText.take(200)}'")
         return TranslationResult(
             originalText = text,
             translatedText = chosenText,
             detectedLanguage = "",
-            translationType = if (chosenMode == LineMode.TRANSLITERATED) "Both" else "Translated",
+            translationType = when {
+                !translationOut.isNullOrBlank() && !transliterationOut.isNullOrBlank() -> "Both"
+                !translationOut.isNullOrBlank() -> "Translated"
+                !transliterationOut.isNullOrBlank() -> "Transliterated"
+                else -> "Original"
+            },
             linePairs = listOf(TranslationLinePair(text, translationOut, transliterationOut, chosenMode))
         )
     }
@@ -242,16 +353,42 @@ class TranslationEngine(private val context: Context) {
         var attempt = 0
         var last: String? = null
         while (attempt < 2) { // try at most twice (initial + 1 re-init)
-            val result = suspendCoroutine<String?> { continuation ->
-                try {
-                    englishToGujaratiTranslator?.translate(text)
-                        ?.addOnSuccessListener { r -> continuation.resume(r) }
-                        ?.addOnFailureListener { _ -> continuation.resume(null) }
-                } catch (e: IllegalStateException) {
-                    continuation.resume(null)
+            if (!ensureModelReady()) {
+                Log.w(TAG, "Translation model not ready; skipping translation")
+                return null
+            }
+
+            val result = withTimeoutOrNull(6000L) {
+                suspendCancellableCoroutine<String?> { continuation ->
+                    try {
+                        englishToGujaratiTranslator?.translate(text)
+                            ?.addOnSuccessListener { r ->
+                                if (continuation.isActive) continuation.resume(r)
+                            }
+                            ?.addOnFailureListener { e ->
+                                Log.w(TAG, "ML Kit translate() failed: ${e.message}", e)
+                                if (continuation.isActive) continuation.resume(null)
+                            }
+                    } catch (e: IllegalStateException) {
+                        if (continuation.isActive) continuation.resume(null)
+                    }
                 }
             }
+
             if (result != null) return result
+
+            // Recovery: if the model on disk is corrupted/incomplete, delete and re-download once.
+            if (!didForceRedownloadOnce) {
+                didForceRedownloadOnce = true
+                try {
+                    Log.w(TAG, "Translation failed; forcing model re-download once")
+                    forceRedownloadModels()
+                    // Retry in the next loop iteration
+                } catch (e: Exception) {
+                    Log.e(TAG, "Force re-download failed", e)
+                }
+            }
+
             // If translator might be closed, re-init and retry
             attempt++
             if (attempt < 2) {

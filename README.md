@@ -69,6 +69,10 @@ Key design principles:
 
 ---
 
+## 📲 Build & Install (USB)
+
+See [install.md](install.md) for Windows + USB cable build/install steps and Redmi/HyperOS phone settings.
+
 ## 📁 Key Kotlin Components
 
 | File | Responsibility |
