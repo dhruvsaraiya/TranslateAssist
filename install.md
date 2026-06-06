@@ -172,12 +172,26 @@ You should see the translation popup with streaming results.
 - Set Battery saver to **No restrictions** and enable **Autostart**
 - Lock the app in Recents
 
+HyperOS/MIUI extras (common):
+- Settings → Apps → Manage apps → TranslateAssist → **Other permissions** → allow anything like:
+   - “Display pop-up windows while running in background”
+   - “Start in background” / “Run in background”
+- Ensure the ongoing notification “TranslateAssist active” is not blocked.
+
 ### Accessibility toggles off by itself
 - Re-enable it in Settings (only user can do this)
 - Ensure “Allow restricted settings” is enabled for TranslateAssist
 - Apply the anti-kill steps above
 
+If Android/HyperOS shows “This app is malfunctioning” under the Accessibility toggle:
+1. Settings → Apps → Manage apps → TranslateAssist → **⋮ (More)** → **Allow restricted settings**
+   - This can get reset after reinstall/update from Android Studio.
+2. Settings → Accessibility → TranslateAssist → toggle **OFF**, wait a moment, toggle **ON**
+   - Unfortunately HyperOS enforces a cooldown; the goal is to avoid needing to do this often.
+3. Settings → Apps → Manage apps → TranslateAssist → Battery saver → **No restrictions**
+4. Reboot phone once (often clears the stuck “malfunctioning” state)
+
 ### First translation fails / model not downloading
-- The ML Kit model download is currently Wi‑Fi-only in code. Use Wi‑Fi once for the first download.
+- The ML Kit model downloads on first use. Ensure internet is allowed for TranslateAssist (Wi‑Fi or mobile data) and Google Play services is up to date.
 
 ---

@@ -1,9 +1,12 @@
 package com.translateassist
 
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
@@ -13,19 +16,13 @@ import androidx.core.app.ActivityCompat
 import android.content.pm.PackageManager
 import androidx.appcompat.app.AppCompatActivity
 import com.translateassist.service.OverlayService
+import com.translateassist.service.OverlayClickHandler
 import com.translateassist.service.TranslateAccessibilityService
 import com.translateassist.util.AccessibilityUtils
-import com.translateassist.translation.TranslationEngine
-import com.translateassist.ui.TranslationPopup
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import com.translateassist.translation.TranslationController
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var translationEngine: TranslationEngine
-    private lateinit var translationPopup: TranslationPopup
-    
     private lateinit var statusText: TextView
     private lateinit var overlayButton: Button
     private lateinit var accessibilityButton: Button
@@ -50,18 +47,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeComponents() {
-        translationEngine = TranslationEngine(this)
-        translationPopup = TranslationPopup(this)
-        
-        // Set up overlay button click handler
-        OverlayService.onOverlayClicked = {
-            handleOverlayClick()
-        }
-        
-        // Set up accessibility service text extraction handler
-        TranslateAccessibilityService.onTextExtracted = { text ->
-            translateAndShowResult(text)
-        }
+        // The translation engine + popup now live in a process-wide controller so they survive the
+        // Activity being destroyed (e.g. when the app is swiped from recents). This is what lets the
+        // floating overlay keep translating without reopening the app.
+        TranslationController.init(this)
+
+        // Route the overlay tap through the shared handler so it behaves identically whether or not
+        // this Activity is alive.
+        OverlayService.onOverlayClicked = { OverlayClickHandler.onClick(this) }
+
+        // Let the accessibility service deliver extracted text straight to the controller.
+        TranslateAccessibilityService.onTextExtracted = null
     }
 
     private fun setupClickListeners() {
@@ -75,61 +71,6 @@ class MainActivity : AppCompatActivity() {
 
         accessibilityButton.setOnClickListener {
             openAccessibilitySettings()
-        }
-    }
-
-    private fun handleOverlayClick() {
-        android.util.Log.d("MainActivity", "Overlay button clicked!")
-        Toast.makeText(this, "Translate button clicked!", Toast.LENGTH_SHORT).show()
-        
-        val systemEnabled = com.translateassist.util.AccessibilityUtils.isServiceEnabled(this, TranslateAccessibilityService::class.java)
-        val live = TranslateAccessibilityService.instance
-        if (live != null) {
-            android.util.Log.d("MainActivity", "Accessibility service active, extracting...")
-            live.extractTextFromWhatsApp()
-            return
-        }
-        if (!systemEnabled) {
-            Toast.makeText(this, "Enable accessibility service first", Toast.LENGTH_SHORT).show()
-            android.util.Log.w("MainActivity", "Accessibility service disabled in system settings")
-            return
-        }
-        // System toggle ON but service instance not yet bound (process restart race). Queue action.
-        Toast.makeText(this, "Starting accessibility service...", Toast.LENGTH_SHORT).show()
-        android.util.Log.d("MainActivity", "Queueing extraction until service connects")
-        TranslateAccessibilityService.runWhenReady {
-            runOnUiThread {
-                TranslateAccessibilityService.instance?.extractTextFromWhatsApp()
-            }
-        }
-        // Fallback timeout message if not ready in ~3s
-        statusText.postDelayed({
-            if (TranslateAccessibilityService.instance == null) {
-                android.util.Log.w("MainActivity", "Service still not connected after wait")
-                Toast.makeText(this, "Still waiting for service. Re-open Accessibility settings if it doesn't start.", Toast.LENGTH_LONG).show()
-            }
-        }, 3000)
-    }
-
-    private fun translateAndShowResult(text: String) {
-        if (text.isBlank()) {
-            Toast.makeText(this, "No text found to translate", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        CoroutineScope(Dispatchers.Main).launch {
-            try {
-                // Start streaming popup
-                translationPopup.startStreaming()
-                val full = translationEngine.translateTextStreaming(text) { pair ->
-                    // Ensure on main thread for UI update
-                    runOnUiThread { translationPopup.appendStreamingPair(pair) }
-                }
-                // Finalize (hide loader if still visible)
-                translationPopup.finalizeStreaming()
-            } catch (e: Exception) {
-                Toast.makeText(this@MainActivity, "Translation failed: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
         }
     }
 
@@ -243,6 +184,102 @@ class MainActivity : AppCompatActivity() {
 
         // Request notifications permission on Android 13+ so foreground service notification can be posted.
         ensureNotificationPermissionIfNeeded()
+
+        // The single biggest cause of "the overlay comes but nothing works after clearing recents"
+        // is the OS killing our process and never rebinding the accessibility service. Asking the
+        // user to exempt us from battery optimisation and to enable Autostart (MIUI/HyperOS, etc.)
+        // keeps the process alive so the permission only ever needs to be granted once.
+        maybeShowKeepAliveGuidance()
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return true
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        if (isIgnoringBatteryOptimizations()) return
+        try {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            // Fall back to the general battery optimisation list.
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) {
+                Toast.makeText(this, "Please allow background activity for TranslateAssist in Settings", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /**
+     * Opens the OEM "Autostart" / "Auto-launch" manager when present (MIUI/HyperOS, Huawei, Oppo,
+     * Vivo, etc.). These OEMs kill the process on a recents-swipe and only relaunch background
+     * components if the app is on the autostart allow-list.
+     */
+    private fun openAutoStartSettings(): Boolean {
+        val candidates = listOf(
+            ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
+            ComponentName("com.letv.android.letvsafe", "com.letv.android.letvsafe.AutobootManageActivity"),
+            ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"),
+            ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
+            ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"),
+            ComponentName("com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"),
+            ComponentName("com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"),
+            ComponentName("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"),
+            ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")
+        )
+        for (cn in candidates) {
+            try {
+                val intent = Intent().setComponent(cn)
+                if (packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) != null) {
+                    startActivity(intent)
+                    return true
+                }
+            } catch (_: Exception) { /* try next */ }
+        }
+        return false
+    }
+
+    /**
+     * Shows a one-time guidance dialog (per install) that walks the user through the OEM settings
+     * needed to stop the system from killing the service. Re-shown only while the app is still not
+     * exempt from battery optimisation.
+     */
+    private fun maybeShowKeepAliveGuidance() {
+        if (isIgnoringBatteryOptimizations()) return
+        val prefs = getSharedPreferences("translateassist", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("keepalive_guidance_shown", false)) {
+            // Still ask for the battery exemption silently even if we've shown the dialog once.
+            requestBatteryOptimizationExemption()
+            return
+        }
+        prefs.edit().putBoolean("keepalive_guidance_shown", true).apply()
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Keep TranslateAssist running")
+            .setMessage(
+                """
+                To avoid re-granting the Accessibility permission every time you clear recent apps:
+
+                1. Allow background activity (battery) — tap "Allow background".
+                2. Enable Autostart for TranslateAssist.
+                3. In recent apps, lock TranslateAssist so it isn't swiped away.
+
+                You only need to do this once.
+                """.trimIndent()
+            )
+            .setPositiveButton("Allow background") { _, _ ->
+                requestBatteryOptimizationExemption()
+                if (!openAutoStartSettings()) {
+                    Toast.makeText(this, "Open Settings > Apps > TranslateAssist and enable Autostart", Toast.LENGTH_LONG).show()
+                }
+            }
+            .setNegativeButton("Later") { d, _ -> d.dismiss() }
+            .show()
     }
 
     private fun hasNotificationPermission(): Boolean {
@@ -293,8 +330,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        translationEngine.cleanup()
-        translationPopup.hidePopup()
+        // Intentionally do NOT tear down the translation engine or popup here: they are owned by the
+        // process-wide TranslationController so the floating overlay keeps working after this
+        // Activity is destroyed (e.g. the app is swiped away from recents).
     }
 
     companion object {

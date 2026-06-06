@@ -17,6 +17,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import com.translateassist.R
+import android.util.Log
 
 class OverlayService : Service() {
 
@@ -32,11 +33,19 @@ class OverlayService : Service() {
     companion object {
         var instance: OverlayService? = null
         var onOverlayClicked: (() -> Unit)? = null
+        private const val TAG = "OverlayService"
     }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // Default click behaviour that works even when MainActivity is not alive (e.g. the app was
+        // swiped from recents and the overlay was restarted by START_STICKY / the accessibility
+        // service). MainActivity may still override this while it is in the foreground.
+        if (onOverlayClicked == null) {
+            val appCtx = applicationContext
+            onOverlayClicked = { OverlayClickHandler.onClick(appCtx) }
+        }
         promoteToForeground()
         createOverlay()
     }
@@ -46,7 +55,8 @@ class OverlayService : Service() {
         if (VERSION.SDK_INT >= VERSION_CODES.O) {
             val mgr = getSystemService(NotificationManager::class.java)
             if (mgr?.getNotificationChannel(channelId) == null) {
-                val channel = NotificationChannel(channelId, "TranslateAssist Overlay", NotificationManager.IMPORTANCE_MIN).apply {
+                // IMPORTANCE_LOW tends to survive OEM suppression better than MIN.
+                val channel = NotificationChannel(channelId, "TranslateAssist Overlay", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "Keeps the floating translate button alive"
                     setShowBadge(false)
                     lockscreenVisibility = Notification.VISIBILITY_SECRET
@@ -65,7 +75,9 @@ class OverlayService : Service() {
             .build()
         try {
             startForeground(1011, notification)
-        } catch (_: Exception) { /* ignore */ }
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

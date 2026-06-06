@@ -1,9 +1,13 @@
 package com.translateassist.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.util.Log
+import com.translateassist.translation.TranslationController
 
 class TranslateAccessibilityService : AccessibilityService() {
 
@@ -31,6 +35,9 @@ class TranslateAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         Log.d(TAG, "Accessibility service connected")
+        // Self-heal: when the service (re)binds after a process restart, bring the floating dot
+        // back automatically so the user never has to reopen the app or re-toggle the permission.
+        ensureOverlayRunning()
         val toRun: List<() -> Unit> = synchronized(readinessQueue) {
             val copy = readinessQueue.toList()
             readinessQueue.clear()
@@ -38,6 +45,29 @@ class TranslateAccessibilityService : AccessibilityService() {
         }
         toRun.forEach { action ->
             try { action() } catch (e: Exception) { Log.w(TAG, "Deferred action failed", e) }
+        }
+    }
+
+    /**
+     * Starts the foreground OverlayService if the overlay permission is granted and it isn't
+     * already running. Keeping a foreground service in this same process also raises the
+     * process priority, making it far less likely to be killed by aggressive OEM memory managers.
+     */
+    private fun ensureOverlayRunning() {
+        try {
+            val canOverlay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Settings.canDrawOverlays(this)
+            } else true
+            if (!canOverlay) return
+            if (OverlayService.instance != null) return
+            val intent = Intent(this, OverlayService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not auto-start overlay", e)
         }
     }
 
@@ -66,6 +96,20 @@ class TranslateAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Deliver extracted text to whoever is listening. If MainActivity has registered a callback we
+     * honour it; otherwise we drive the process-wide [TranslationController] directly so the popup
+     * still appears when no Activity is alive (e.g. right after the app was swiped from recents).
+     */
+    private fun deliver(text: String) {
+        val cb = onTextExtracted
+        try {
+            if (cb != null) cb(text) else TranslationController.handleExtractedText(this, text)
+        } catch (e: Exception) {
+            Log.e(TAG, "Text delivery failed", e)
+        }
+    }
+
+    /**
      * Extract text from current app when overlay button is tapped
      */
     fun extractTextFromWhatsApp() {
@@ -74,7 +118,7 @@ class TranslateAccessibilityService : AccessibilityService() {
             null
         }
         if (rootNode == null) {
-            onTextExtracted?.invoke("Error: Could not access current screen. Re-open the target chat.")
+            deliver("Error: Could not access current screen. Re-open the target chat.")
             return
         }
 
@@ -91,7 +135,7 @@ class TranslateAccessibilityService : AccessibilityService() {
         
         if (packageName !in supportedApps) {
             Log.w(TAG, "App not supported: $packageName")
-            onTextExtracted?.invoke("Error: Please open WhatsApp or Messages app")
+            deliver("Error: Please open WhatsApp or Messages app")
             return
         }
 
@@ -128,20 +172,16 @@ class TranslateAccessibilityService : AccessibilityService() {
                 val windowed = if (uniqueOrdered.size > MAX_VISIBLE_SEND) uniqueOrdered.takeLast(MAX_VISIBLE_SEND) else uniqueOrdered
                 val payload = windowed.joinToString("\n")
                 Log.d(TAG, "Sending VISIBLE messages (${windowed.size}/${uniqueOrdered.size} unique): $payload")
-                try {
-                    onTextExtracted?.invoke(payload)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Callback dispatch failed", e)
-                }
+                deliver(payload)
             } else {
                 // Fallback - show debug info if no messages found
                 val debugText = "No clear messages found. All texts:\n" + 
                                allTexts.take(8).joinToString("\n") { "• $it" }
-                onTextExtracted?.invoke(debugText)
+                deliver(debugText)
             }
         } else {
             Log.w(TAG, "No text extracted from app")
-            try { onTextExtracted?.invoke("No text found. Scroll the chat and try again.") } catch (_: Exception) {}
+            deliver("No text found. Scroll the chat and try again.")
         }
     }
 
