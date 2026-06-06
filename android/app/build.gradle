@@ -44,9 +44,8 @@ dependencies {
     implementation 'com.google.android.material:material:1.10.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     
-    // Google ML Kit Translation
-    implementation 'com.google.mlkit:translate:17.0.1'
-    implementation 'com.google.mlkit:language-id:17.0.4'
+    // Google ML Kit Language ID
+    implementation 'com.google.mlkit:language-id:17.0.5'
     
     // For text recognition (OCR fallback)
     implementation 'com.google.mlkit:text-recognition:16.0.0'

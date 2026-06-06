@@ -101,6 +101,7 @@ class MainActivity : AppCompatActivity() {
                 updateStatus()
                 return
             }
+            OverlayService.setEnabled(this, true)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)
             } else {
@@ -108,6 +109,8 @@ class MainActivity : AppCompatActivity() {
             }
             overlayButton.text = "Stop Overlay"
         } else {
+            // Record the explicit user intent BEFORE stopping so no auto-start path revives it.
+            OverlayService.setEnabled(this, false)
             stopService(intent)
             overlayButton.text = "Start Overlay"
         }
@@ -117,7 +120,7 @@ class MainActivity : AppCompatActivity() {
     private fun openAccessibilitySettings() {
         val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
         startActivity(intent)
-    Toast.makeText(this, "Please enable '${getString(R.string.app_name)}' accessibility service", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "Please enable '${getString(R.string.app_name)}' accessibility service", Toast.LENGTH_LONG).show()
     }
 
     private fun updateStatus() {
@@ -132,28 +135,49 @@ class MainActivity : AppCompatActivity() {
             hasNotificationPermission() -> "Granted"
             else -> "Not Granted"
         }
+        val batteryOptimization = when {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.M -> "Not required"
+            isIgnoringBatteryOptimizations() -> "No restrictions"
+            else -> "Needs approval"
+        }
+        val autoStartStatus = if (findAutoStartSettingsIntent() != null) {
+            "Manual setup needed"
+        } else {
+            "Check phone settings"
+        }
         val appName = getString(R.string.app_name)
         statusText.text = """
             Overlay Service: $overlayStatus
             Accessibility Service: $accessibilityStatus  
             Overlay Permission: $overlayPermission
             Notification Permission: $notifPermission
+            Battery Optimization: $batteryOptimization
+            Autostart / Auto-launch: $autoStartStatus
 
             Setup Steps:
-            1. Tap 'Start Overlay' to grant overlay permission
-            2. Tap 'Enable Accessibility Service' and turn on $appName
-            3. Start the overlay service
-            4. Open WhatsApp and tap the floating dot to translate
+            1. Allow notifications if asked
+            2. Tap 'Grant Overlay Permission' if overlay permission is missing
+            3. Tap 'Enable Accessibility Service' and turn on $appName
+            4. Enable Autostart / Auto-launch for $appName
+            5. Set Battery saver to No restrictions
+            6. Tap 'Start Overlay' to show the floating button
+            7. Open WhatsApp and tap the floating dot to translate
 
-            Note: These are special Android permissions that require manual approval in system settings.
+            Note: Autostart is an OEM setting, so Android does not reliably report whether it is already enabled.
         """.trimIndent()
 
-        overlayButton.text = if (OverlayService.instance != null) "Stop Overlay" else "Start Overlay"
-        overlayButton.isEnabled = hasOverlayPermission()
+        overlayButton.text = when {
+            OverlayService.instance != null -> "Stop Overlay"
+            !hasOverlayPermission() -> "Grant Overlay Permission"
+            else -> "Start Overlay"
+        }
+        overlayButton.isEnabled = true
 
-        // Auto-start overlay if user swiped app away and reopened, while permissions intact
-        if (hasOverlayPermission() && OverlayService.instance == null && accessibilitySystemEnabled && ensureNotificationPermissionIfNeeded()) {
-            // Lightweight auto start; user already approved permissions previously
+        // Auto-start overlay only if the user previously had it on (and didn't explicitly stop it),
+        // e.g. after swiping the app away and reopening it. OverlayService.isEnabled() is the single
+        // source of truth so "Stop Overlay" actually sticks.
+        if (OverlayService.isEnabled(this) && hasOverlayPermission() && OverlayService.instance == null &&
+            accessibilitySystemEnabled && ensureNotificationPermissionIfNeeded()) {
             val serviceIntent = Intent(this, OverlayService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent)
@@ -222,6 +246,16 @@ class MainActivity : AppCompatActivity() {
      * components if the app is on the autostart allow-list.
      */
     private fun openAutoStartSettings(): Boolean {
+        val intent = findAutoStartSettingsIntent() ?: return false
+        return try {
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun findAutoStartSettingsIntent(): Intent? {
         val candidates = listOf(
             ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
             ComponentName("com.letv.android.letvsafe", "com.letv.android.letvsafe.AutobootManageActivity"),
@@ -237,46 +271,44 @@ class MainActivity : AppCompatActivity() {
             try {
                 val intent = Intent().setComponent(cn)
                 if (packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) != null) {
-                    startActivity(intent)
-                    return true
+                    return intent
                 }
             } catch (_: Exception) { /* try next */ }
         }
-        return false
+        return null
     }
 
     /**
-     * Shows a one-time guidance dialog (per install) that walks the user through the OEM settings
-     * needed to stop the system from killing the service. Re-shown only while the app is still not
-     * exempt from battery optimisation.
+     * Shows a one-time guidance dialog (per install) for the OEM settings that let the system
+     * rebind our accessibility service after the process is killed — so the user never has to
+     * toggle the Accessibility permission off/on again.
+     *
+     * On MIUI/HyperOS, Huawei, Oppo, Vivo, etc. the key enabler is "Autostart" / "Auto-launch":
+     * without it the OS blocks our package from being relaunched in the background, which is why
+     * the permission appears enabled yet the service never rebinds. This is independent of battery
+     * optimisation, so we surface it regardless of the battery-exemption state.
      */
     private fun maybeShowKeepAliveGuidance() {
-        if (isIgnoringBatteryOptimizations()) return
         val prefs = getSharedPreferences("translateassist", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("keepalive_guidance_shown", false)) {
-            // Still ask for the battery exemption silently even if we've shown the dialog once.
-            requestBatteryOptimizationExemption()
-            return
-        }
+        if (prefs.getBoolean("keepalive_guidance_shown", false)) return
         prefs.edit().putBoolean("keepalive_guidance_shown", true).apply()
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Keep TranslateAssist running")
+            .setTitle("One-time setup")
             .setMessage(
                 """
-                To avoid re-granting the Accessibility permission every time you clear recent apps:
+                So you never have to re-toggle the Accessibility permission after clearing recent apps, grant these once:
 
-                1. Allow background activity (battery) — tap "Allow background".
-                2. Enable Autostart for TranslateAssist.
-                3. In recent apps, lock TranslateAssist so it isn't swiped away.
+                1. Enable Autostart / Auto-launch for TranslateAssist (this is the important one — it lets the service start again on its own).
+                2. Allow background / no battery restrictions.
 
-                You only need to do this once.
+                It's fine if the floating dot disappears when you clear recents — just reopen the app and tap "Start Overlay" and it will work.
                 """.trimIndent()
             )
-            .setPositiveButton("Allow background") { _, _ ->
-                requestBatteryOptimizationExemption()
+            .setPositiveButton("Open Autostart") { _, _ ->
                 if (!openAutoStartSettings()) {
                     Toast.makeText(this, "Open Settings > Apps > TranslateAssist and enable Autostart", Toast.LENGTH_LONG).show()
                 }
+                requestBatteryOptimizationExemption()
             }
             .setNegativeButton("Later") { d, _ -> d.dismiss() }
             .show()

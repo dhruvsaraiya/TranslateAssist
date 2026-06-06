@@ -1,4 +1,4 @@
-# TranslateAssist — Build & Install (USB Cable)
+# TranslateAssist - Build & Install (USB Cable)
 
 This guide explains how to build and install TranslateAssist on an Android phone using a USB cable (Windows + ADB), and the required phone settings (Redmi / HyperOS / Android 15 included).
 
@@ -51,6 +51,7 @@ This is the easiest route because Android Studio handles Gradle sync, app instal
 - View logs: **Logcat** → filter by tags:
    - `TranslateAccessibility`
    - `TranslationEngine`
+   - `OnlineTranslator`
    - `Transliterator`
 
 ---
@@ -110,12 +111,23 @@ adb install .\app\build\outputs\apk\debug\app-debug.apk
 
 ---
 
-## 6) First-run permissions inside Android
+## 6) First-run setup inside TranslateAssist
 
-TranslateAssist needs 3 things to work reliably:
-1. Notifications permission (Android 13+) for the foreground-service notification
-2. “Display over other apps” (overlay)
-3. Accessibility Service enable
+TranslateAssist's main screen shows these live statuses:
+- **Overlay Service**: Running / Stopped
+- **Accessibility Service**: Active / Enabled (waiting) / Disabled
+- **Overlay Permission**: Granted / Not Granted
+- **Notification Permission**: Granted / Not Granted / Not required
+
+The UI has two primary buttons:
+- **Start Overlay / Stop Overlay**: requests overlay permission if needed, then starts or stops the floating button.
+- **Enable Accessibility Service**: opens Android Accessibility settings so you can enable TranslateAssist.
+
+TranslateAssist needs 4 things to work reliably:
+1. Notifications permission on Android 13+ for the foreground-service notification.
+2. "Display over other apps" permission for the floating button and popup.
+3. Accessibility Service enabled for on-demand visible-message extraction.
+4. Autostart/background activity allowed on aggressive OEM builds so the accessibility service can reconnect after the process is killed.
 
 ### A) Allow restricted settings (important for sideloaded Accessibility)
 On many Redmi/HyperOS devices, Accessibility for sideloaded apps requires this:
@@ -125,7 +137,7 @@ On many Redmi/HyperOS devices, Accessibility for sideloaded apps requires this:
 ### B) Allow Notifications (Android 13+)
 - Settings → Notifications & Control center → App notifications → **TranslateAssist** → Allow
 
-(Or accept the runtime prompt when the app asks.)
+Or accept the runtime prompt when TranslateAssist asks. If notifications are denied, Android may prevent the foreground overlay service from staying up.
 
 ### C) Allow “Display over other apps”
 - Settings → Apps → Special permissions → **Display over other apps** → TranslateAssist → Allow
@@ -133,11 +145,21 @@ On many Redmi/HyperOS devices, Accessibility for sideloaded apps requires this:
 ### D) Enable Accessibility Service
 - Settings → Accessibility → Downloaded apps / Installed services → **TranslateAssist** → ON
 
+### E) Use the in-app flow
+1. Open TranslateAssist.
+2. Accept the notification prompt if shown.
+3. Tap **Start Overlay** and grant overlay permission if Android opens that settings screen.
+4. Tap **Enable Accessibility Service**, turn on TranslateAssist, then return to the app.
+5. Tap **Start Overlay** again. The floating dot should appear.
+6. If the one-time setup dialog appears, tap **Open Autostart** and enable Autostart/Auto-launch when your phone shows that page. Also allow background activity / no battery restrictions when prompted.
+
+The app remembers your explicit overlay choice. If you tap **Stop Overlay**, auto-start paths will respect that and should not revive the floating dot until you start it again.
+
 ---
 
 ## 7) Redmi / HyperOS anti-kill settings (highly recommended)
 
-These prevent the overlay service from being killed in the background (the most common issue).
+These prevent the overlay/accessibility process from being killed in the background. This matters because the floating dot can only extract text after Android has rebound the accessibility service.
 
 1. **Battery saver**: Settings → Apps → Manage apps → TranslateAssist → **Battery saver** → **No restrictions**
 2. **Autostart**: Settings → Apps → Manage apps → TranslateAssist → **Autostart** → ON
@@ -151,10 +173,11 @@ These prevent the overlay service from being killed in the background (the most 
 ## 8) Usage test
 
 1. Open TranslateAssist.
-2. Tap **Enable Accessibility Service** → enable it in Settings.
-3. Tap **Start Overlay** → allow overlay permission → start overlay.
-4. Open WhatsApp.
-5. Tap the floating dot.
+2. Confirm the status panel shows overlay permission granted and accessibility active or enabled.
+3. Tap **Start Overlay** if the floating dot is not already visible.
+4. Open WhatsApp or a supported Messages app.
+5. Scroll so the messages you want are visible.
+6. Tap the floating dot.
 
 You should see the translation popup with streaming results.
 
@@ -171,6 +194,7 @@ You should see the translation popup with streaming results.
 - Ensure Notifications are allowed (Android 13+)
 - Set Battery saver to **No restrictions** and enable **Autostart**
 - Lock the app in Recents
+- Reopen TranslateAssist and tap **Start Overlay** if you explicitly stopped it or cleared recent apps
 
 HyperOS/MIUI extras (common):
 - Settings → Apps → Manage apps → TranslateAssist → **Other permissions** → allow anything like:
@@ -183,6 +207,11 @@ HyperOS/MIUI extras (common):
 - Ensure “Allow restricted settings” is enabled for TranslateAssist
 - Apply the anti-kill steps above
 
+### Accessibility is enabled but the floating dot says the service is waking up
+- Give Android a few seconds to rebind the service.
+- If it still does not respond, reopen TranslateAssist and check that the status panel says **Accessibility Service: Active**.
+- Enable Autostart/Auto-launch and background activity. On Redmi/HyperOS this is the setting that usually lets Android restart the service after clearing recents.
+
 If Android/HyperOS shows “This app is malfunctioning” under the Accessibility toggle:
 1. Settings → Apps → Manage apps → TranslateAssist → **⋮ (More)** → **Allow restricted settings**
    - This can get reset after reinstall/update from Android Studio.
@@ -191,7 +220,9 @@ If Android/HyperOS shows “This app is malfunctioning” under the Accessibilit
 3. Settings → Apps → Manage apps → TranslateAssist → Battery saver → **No restrictions**
 4. Reboot phone once (often clears the stuck “malfunctioning” state)
 
-### First translation fails / model not downloading
-- The ML Kit model downloads on first use. Ensure internet is allowed for TranslateAssist (Wi‑Fi or mobile data) and Google Play services is up to date.
+### Translation or transliteration fails
+- Translation and transliteration are online best-effort calls. Ensure internet is allowed for TranslateAssist over Wi-Fi or mobile data.
+- Watch Logcat for `TranslationEngine`, `OnlineTranslator`, and `Transliterator`.
+- If transliteration fails but translation succeeds, the app falls back automatically.
 
 ---

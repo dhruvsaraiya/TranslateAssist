@@ -1,14 +1,14 @@
 <div align="center">
 
 # TranslateAssist
-### Floating, on-demand English → Gujarati translation & transliteration overlay for WhatsApp (and compatible messaging apps)
+### Floating, on-demand English -> Gujarati translation & transliteration overlay for WhatsApp (and compatible messaging apps)
 
 </div>
 
-TranslateAssist is a personal-use Android utility that overlays a draggable “Translate” button on top of WhatsApp (and select messaging apps). When tapped, it extracts ONLY the currently visible messages (stateless – nothing is stored) and produces a streaming, line‑by‑line Gujarati output using:
+TranslateAssist is a personal-use Android utility that overlays a draggable "Translate" button on top of WhatsApp (and select messaging apps). When tapped, it extracts ONLY the currently visible messages (stateless - nothing is stored) and produces a streaming, line-by-line Gujarati output using:
 
-1. Offline ML Kit translation (English → Gujarati)
-2. Live phonetic transliteration ("kem cho" → "કેમ છો") via Google Input Tools (unofficial endpoint)
+1. Best-effort online translation (auto/English -> Gujarati) via Google's translate endpoint
+2. Live phonetic transliteration ("kem cho" -> "કેમ છો") via Google Input Tools (unofficial endpoint)
 
 The UI shows incremental results almost immediately while the rest of the lines finish processing.
 
@@ -22,9 +22,10 @@ The UI shows incremental results almost immediately while the rest of the lines 
 - Smart accessibility parsing with heavy filtering (skips UI chrome, timestamps, buttons, metadata)
 - Deduplicates and keeps only the most recent N (default 8) visible message texts
 - Selection-aware (can prefer selected text if logic extended; base extraction currently stateless)
-- Dual pipeline per line:
-  * Translation (ML Kit EN→GU, offline once model downloaded)
-  * Transliteration (phonetic Latin → Gujarati script) – picks transliteration when confidently produced
+- Dual online pipeline per Latin-script line:
+   * Translation (auto/English -> Gujarati) through `OnlineTranslator`
+   * Transliteration (phonetic Latin -> Gujarati script) through Google Input Tools
+   * Transliteration is preferred when present, then translation, then original text
 - Automatic language detection & script inspection:
   * English (Latin only) → translate + transliterate
   * Gujarati script already → left as original
@@ -36,10 +37,11 @@ The UI shows incremental results almost immediately while the rest of the lines 
   * Copy All button (enabled after stream completes)
 - Per-line long‑press copy: copies translation + transliteration (or original fallback)
 - Copy All aggregated output to clipboard
-- Resilient translator lifecycle (re‑initializes on closed/failed state with retry)
-- Safe transliteration networking (short timeouts, silent failure fallback)
+- Process-wide translation controller and popup so overlay taps keep working even when `MainActivity` is gone
+- Overlay self-healing through the accessibility service when the user previously left it enabled
+- Safe online calls (short timeouts, silent failure fallback)
 - Entire processing stateless (no persisted logs/messages)
-- Works with Android 6.0 (API 23) through Android 14 (targetSdk 34)
+- Works with Android 6.0+ (minSdk 23, targetSdk 34)
 - Minimal, clearly scoped permissions
 
 ---
@@ -49,11 +51,15 @@ The UI shows incremental results almost immediately while the rest of the lines 
 ```
 Overlay Tap
    ↓
-TranslateAccessibilityService (extract + filter visible texts)
+OverlayClickHandler
+   ↓
+TranslateAccessibilityService (extract + filter visible texts, or queue until service reconnects)
    ↓ (unique, recent window, newline-joined)
+TranslationController (process-wide engine + popup)
+   ↓
 TranslationEngine
-   ├─ Language detect / script heuristics
-   ├─ ML Kit EN→GU translator (offline after model download)
+   ├─ ML Kit language detection / script heuristics
+   ├─ OnlineTranslator (auto/English -> Gujarati, network, optional)
    └─ Google Input Tools transliterator (network, optional)
         ↓ (per line: original + translation + transliteration + chosenMode)
 Streaming UI (TranslationPopup + RecyclerView adapter)
@@ -62,9 +68,9 @@ Clipboard (line long‑press or Copy All)
 ```
 
 Key design principles:
-- On‑demand: nothing happens until user requests it
-- Local-first: translation is offline once model present
-- Fail-soft: any failing line simply uses whichever artifact succeeded (transliteration → translation → original)
+- On‑demand: the accessibility service only extracts when the floating button is tapped
+- Fail-soft: any failing line simply uses whichever artifact succeeded (transliteration -> translation -> original)
+- Lifecycle-tolerant: the overlay tap path does not require an Activity to be alive
 - Ephemeral: no storage, no analytics
 
 ---
@@ -77,11 +83,15 @@ See [install.md](install.md) for Windows + USB cable build/install steps and Red
 
 | File | Responsibility |
 |------|----------------|
-| `MainActivity.kt` | Permission UI, status display, wiring overlay + extraction callbacks |
+| `App.kt` | Application-level translation engine creation, warm-up, and global crash logging |
+| `MainActivity.kt` | Permission UI, status display, overlay start/stop, and one-time keep-alive guidance |
 | `OverlayService.kt` | Draws & manages draggable overlay button |
+| `OverlayClickHandler.kt` | Handles floating-dot taps when the Activity is alive or gone; queues extraction while Accessibility reconnects |
 | `TranslateAccessibilityService.kt` | Extracts & filters visible message text nodes |
-| `TranslationEngine.kt` | Language heuristics, streaming orchestration, ML Kit + transliteration fusion |
-| `Transliterator.kt` | Google Input Tools POST client (phonetic → Gujarati script) |
+| `TranslationController.kt` | Process-wide bridge from extracted text to streaming popup/engine |
+| `TranslationEngine.kt` | Language heuristics, streaming orchestration, online translation + transliteration fusion |
+| `OnlineTranslator.kt` | Best-effort Google translate endpoint client (auto/English -> Gujarati) |
+| `Transliterator.kt` | Google Input Tools POST client (phonetic -> Gujarati script) |
 | `TranslationPopup.kt` | Full‑screen dim + popup list, streaming incremental rendering |
 | `TranslationPairAdapter.kt` | Recycler adapter with per-line copy support |
 
@@ -93,8 +103,11 @@ See [install.md](install.md) for Windows + USB cable build/install steps and Red
 |------------|------------|
 | `SYSTEM_ALERT_WINDOW` | Draw floating overlay & popup across apps |
 | `BIND_ACCESSIBILITY_SERVICE` | Read visible text nodes from messaging UI when user taps |
-| `INTERNET` | One-time ML Kit model download + transliteration HTTP calls |
-| (Implicit foreground service capability) | Keep overlay service alive while button visible |
+| `INTERNET` | Online translation + transliteration HTTP calls |
+| `ACCESS_NETWORK_STATE` | Network availability checks for online calls |
+| `FOREGROUND_SERVICE` | Keep the overlay service running while the floating button is visible |
+| `POST_NOTIFICATIONS` | Android 13+ foreground-service notification permission |
+| `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Lets the user exempt the app from battery optimization on aggressive OEM builds |
 
 No contacts, storage, microphone, or location permissions are used.
 
@@ -106,7 +119,7 @@ Per line decision flow:
 ```
 contains Gujarati script? → show original
 else if contains Latin letters only → do BOTH:
-    ML Kit translate EN→GU
+   Online translate auto/EN→GU
     Google Input Tools transliterate phonetic → GU script
     prefer transliteration if present else translation
 else → try translate → fallback original
@@ -114,8 +127,8 @@ else → try translate → fallback original
 Streaming: Each processed line immediately emits a `TranslationLinePair` to the popup; UI remains responsive.
 
 Resilience:
-- Translator re-instantiated if ML Kit client is unexpectedly closed
-- Transliteration timeouts are short; failures are silent (line just uses translation)
+- Language identifier is recreated if ML Kit closes unexpectedly
+- Translation/transliteration calls have short timeouts; failures are silent (line just uses the other result or original)
 - Duplicate suppression + last-window cap prevents ballooning payloads
 
 ---
@@ -148,7 +161,7 @@ cd TranslateAssist/android
 File → Open → select `TranslateAssist/android` (root containing `app/`). Let Gradle sync (ensure JDK 17 selected in Project Structure).
 
 ### 4. Build (GUI)
-Build → Make Project (first time triggers dependency + ML Kit model lazy download at runtime).
+Build → Make Project.
 
 ### 5. Build (Command Line)
 From `TranslateAssist/android`:
@@ -173,14 +186,19 @@ adb pair <host>:<port>
 adb connect <device-ip>:5555
 ```
 
-### 7. First Launch Permissions
-1. Launch app
-2. Tap “Start Overlay” → grant “Display over other apps”
-3. Tap “Enable Accessibility Service” → system settings → enable TranslateAssist service
-4. Return & tap “Start Overlay” again → green floating button appears
+### 7. First Launch Setup UI
+The main screen shows live status for the overlay service, accessibility service, overlay permission, and notification permission.
 
-### 8. First Translation Model Download
-The ML Kit EN→GU model downloads on first actual translation attempt. It’s configured with a Wi‑Fi requirement; ensure Wi‑Fi is on the very first time (after that it’s offline). If you need cellular fallback, modify `DownloadConditions` in `TranslationEngine`.
+1. Launch the app and accept the Android 13+ notification prompt if it appears.
+2. Tap "Start Overlay". If overlay permission is missing, Android opens "Display over other apps" for TranslateAssist.
+3. Tap "Enable Accessibility Service" and turn on TranslateAssist in Android Accessibility settings.
+4. Return to TranslateAssist and tap "Start Overlay" again. The floating button appears.
+5. On the one-time setup dialog, open Autostart/Auto-launch when available and allow background activity / no battery restrictions.
+
+The app remembers explicit overlay intent: "Stop Overlay" disables the auto-start paths, while a previously enabled overlay may be restored when the accessibility service reconnects.
+
+### 8. First Translation Network Use
+Translation and transliteration are network-backed. Make sure the device has internet access for the first and subsequent translation attempts.
 
 ---
 
@@ -221,8 +239,8 @@ Keeps plausible message lines containing meaningful characters or Gujarati scrip
 ## 📦 Dependencies Snapshot
 - Kotlin + Coroutines (`kotlinx-coroutines-android`)
 - AndroidX Core/AppCompat/Material/ConstraintLayout/RecyclerView
-- ML Kit: `translate`, `language-id`, `text-recognition` (OCR reserved for potential fallback, currently not invoked directly)
-- OkHttp (transliteration HTTP endpoint)
+- ML Kit: `language-id`, `text-recognition` (OCR reserved for potential fallback, currently not invoked directly)
+- OkHttp (online translation and transliteration HTTP endpoints)
 
 Chaquopy / Python stack: REMOVED (previous transliteration pipeline replaced by lightweight HTTP transliteration).
 
@@ -232,12 +250,12 @@ Chaquopy / Python stack: REMOVED (previous transliteration pipeline replaced by 
 | Aspect | Behavior |
 |--------|----------|
 | Message Storage | None (in-memory only, discarded after popup closed) |
-| Network Calls | ML Kit model download (once), transliteration endpoint per line (if English phonetic) |
+| Network Calls | Online translation endpoint and transliteration endpoint per Latin-script line |
 | Analytics / Tracking | None |
-| Sensitive Permissions | Only overlay + accessibility + internet |
+| Sensitive Permissions | Overlay, accessibility, notifications, foreground service, internet/network state, battery optimization exemption request |
 | Scope of Accessibility | Reads current foreground nodes only on tap |
 
-Note: Transliteration uses an unofficial Google Input Tools endpoint; content of English lines you request to transliterate is sent over HTTPS. Disable by short‑circuiting calls in `Transliterator.kt` if you need 100% offline operation.
+Note: Translation and transliteration use unofficial Google endpoints; content of Latin-script lines you request to process is sent over HTTPS. Short-circuit `OnlineTranslator.kt` and/or `Transliterator.kt` if you need offline-only behavior.
 
 ---
 
@@ -245,24 +263,25 @@ Note: Transliteration uses an unofficial Google Input Tools endpoint; content of
 
 | Issue | Checks / Fixes |
 |-------|----------------|
-| Overlay button not visible | Overlay permission granted? Service started? Battery optimization killing app? |
-| Accessibility disabled unexpectedly | Some OEMs auto-kill services; reopen settings and re-enable; exclude from battery optimization. |
+| Overlay button not visible | Overlay permission granted? Notifications allowed on Android 13+? Service started? Battery optimization killing app? |
+| Accessibility enabled but not responding | Enable Autostart/Auto-launch, allow background activity, and reopen TranslateAssist if the service does not reconnect. |
 | Popup shows but empty | Are messages actually visible? Try scrolling slightly; ensure app is a supported package. |
-| Repeated “Translation failed” | First model download needs Wi‑Fi (by config). Toggle Wi‑Fi and retry; watch logcat for ML Kit errors. |
+| Repeated "Translation failed" | Check internet access and watch Logcat for `TranslationEngine`, `OnlineTranslator`, or `Transliterator` errors. |
 | Transliteration missing | Network blocked, endpoint slow, or input not phonetic Gujarati. Falls back to translation. |
-| Slow first run | Model download + cold start; subsequent taps faster. |
+| Slow first run | App/process cold start or network latency; subsequent taps are usually faster. |
 | Copies wrong text | Long‑press copies translation + transliteration; use Copy All after stream for full list. |
 | Not targeting right chat | Make sure WhatsApp is foreground before tapping. |
 
 ### Logcat Tags
 - `TranslateAccessibility` – extraction diagnostics
 - `TranslationEngine` – per-line detection, errors
+- `OnlineTranslator` – online translation attempts
 - `Transliterator` – network transliteration attempts
 
 ---
 
 ## 🔧 Extensibility Ideas
-- Add settings UI: toggle transliteration, adjust max visible lines, Wi‑Fi requirement
+- Add settings UI: toggle transliteration, adjust max visible lines, choose online/offline behavior
 - OCR fallback (ML Kit Text Recognition) for image-based messages (dependency already present)
 - Add per-app extraction profiles
 - Support bi-directional (GU → EN) translation
@@ -286,14 +305,14 @@ Personal project: no guaranteed updates. Feel free to fork, audit, and adapt. Su
 2. git clone ... & open /android project
 3. Build & Run (or ./gradlew.bat assembleDebug)
 4. Install APK (adb install)
-5. Grant overlay + accessibility
+5. Grant notifications, overlay + accessibility
 6. Open WhatsApp → tap floating button → see streaming Gujarati output
 ```
 
 ---
 
 ## ✍ Attribution
-Built with AndroidX & Google ML Kit. Gujarati transliteration powered by Google Input Tools (unofficial usage). All trademarks belong to their respective owners.
+Built with AndroidX, Google ML Kit Language ID, OkHttp, Google translate endpoint access, and Google Input Tools transliteration (unofficial usage). All trademarks belong to their respective owners.
 
 ---
 

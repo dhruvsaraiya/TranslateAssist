@@ -55,6 +55,8 @@ class TranslateAccessibilityService : AccessibilityService() {
      */
     private fun ensureOverlayRunning() {
         try {
+            // Respect the user's explicit choice: never revive the overlay if they turned it off.
+            if (!OverlayService.isEnabled(this)) return
             val canOverlay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 Settings.canDrawOverlays(this)
             } else true

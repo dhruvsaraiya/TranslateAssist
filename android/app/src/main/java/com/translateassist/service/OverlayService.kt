@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build.VERSION
 import android.os.Build.VERSION_CODES
+import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
@@ -34,6 +35,25 @@ class OverlayService : Service() {
         var instance: OverlayService? = null
         var onOverlayClicked: (() -> Unit)? = null
         private const val TAG = "OverlayService"
+        private const val PREFS = "translateassist"
+        private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
+
+        /**
+         * User intent for whether the floating overlay should be running. This is the single source
+         * of truth that all auto-start paths (MainActivity.updateStatus, the accessibility service's
+         * self-heal) must honour, so that tapping "Stop Overlay" actually sticks and doesn't get
+         * immediately re-started.
+         */
+        fun isEnabled(context: Context): Boolean =
+            context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_OVERLAY_ENABLED, false)
+
+        fun setEnabled(context: Context, enabled: Boolean) {
+            context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_OVERLAY_ENABLED, enabled).apply()
+        }
     }
 
     override fun onCreate() {
